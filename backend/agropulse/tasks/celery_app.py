@@ -47,5 +47,7 @@ celery_app.conf.update(
     task_routes={
         "agropulse.tasks.pipeline.collect_field_data": {"queue": "collect"},
         "agropulse.tasks.pipeline.analyze_field": {"queue": "analyze"},
+        # Полный цикл начинается со сбора, поэтому идёт в сетевую очередь.
+        "agropulse.tasks.pipeline.process_field": {"queue": "collect"},
     },
 )

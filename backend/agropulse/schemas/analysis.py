@@ -1,0 +1,71 @@
+"""Схемы результатов анализа: аномалии, риск, сводка по проекту."""
+
+import uuid
+from datetime import date
+
+from pydantic import BaseModel, ConfigDict
+
+from agropulse.db.models import AnomalySeverity, FieldStatus
+
+
+class AnomalyRead(BaseModel):
+    """Негативный аномальный период."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    start_date: date
+    end_date: date
+    duration_days: int
+    severity: AnomalySeverity
+    max_zscore: float
+    mean_zscore: float | None
+    # Доля восстановленных точек внутри периода: чем выше, тем осторожнее вывод.
+    restored_fraction: float | None
+    confidence: float | None
+    # Совпавшие факторы и гипотезы о причинах. Это версии, а не диагноз.
+    factors: dict | None
+    explanation: str | None
+
+
+class RiskRead(BaseModel):
+    """Составной риск с раскрытием вклада факторов."""
+
+    field_id: uuid.UUID
+    status: FieldStatus
+    score: float | None
+    breakdown: dict | None
+    explanation: list[str]
+    confidence: float | None
+    insufficient_reason: str | None
+    climatology: dict | None
+
+
+class FieldSummary(BaseModel):
+    """Строка сводного дашборда."""
+
+    field_id: uuid.UUID
+    name: str
+    area_ha: float | None
+    crop: str | None
+    status: FieldStatus
+    risk_score: float | None
+    anomalies_count: int
+    worst_anomaly: AnomalyRead | None
+    observed_points: int
+    restored_points: int
+    mean_valid_fraction: float | None
+    # Место в очереди на осмотр. У полей без данных приоритета нет.
+    inspection_rank: int | None
+
+
+class ProjectSummary(BaseModel):
+    project_id: uuid.UUID
+    period_from: date
+    period_to: date
+    total_fields: int
+    critical: int
+    attention: int
+    normal: int
+    insufficient_data: int
+    fields: list[FieldSummary]

@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from agropulse.api.routers import fields, health, projects
+from agropulse.api.routers import analysis, events, fields, health, parcels, projects
 from agropulse.config import get_settings
 from agropulse.storage import s3
 
@@ -51,3 +51,6 @@ app.include_router(health.router)
 
 app.include_router(projects.router, prefix=settings.api_prefix)
 app.include_router(fields.router, prefix=settings.api_prefix)
+app.include_router(parcels.router, prefix=settings.api_prefix)
+app.include_router(analysis.router, prefix=settings.api_prefix)
+app.include_router(events.router, prefix=settings.api_prefix)

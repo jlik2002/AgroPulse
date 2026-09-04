@@ -21,7 +21,7 @@ from agropulse.schemas.field import (
     ObservationRead,
     TimeseriesRead,
 )
-from agropulse.tasks.pipeline import collect_field_data
+from agropulse.tasks.pipeline import process_field
 
 router = APIRouter(tags=["fields"])
 
@@ -171,21 +171,21 @@ def read_timeseries(field_id: uuid.UUID, db: Session = Depends(get_db)) -> Times
     )
 
 
-@router.post("/fields/{field_id}/collect", status_code=status.HTTP_202_ACCEPTED)
-def start_collection(field_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
-    """Поставить сбор данных по полю в очередь.
+@router.post("/fields/{field_id}/process", status_code=status.HTTP_202_ACCEPTED)
+def start_processing(field_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
+    """Поставить полную обработку поля в очередь.
 
-    Отвечаем сразу: сбор занимает минуты и выполняется воркером. Ход обработки
-    будет доступен через поток событий проекта.
+    Отвечаем сразу: обработка занимает минуты и выполняется воркером. Ход
+    выполнения по стадиям доступен через поток событий проекта.
     """
     field = get_field_or_404(field_id, db)
-    task = collect_field_data.delay(str(field.id))
+    task = process_field.delay(str(field.id))
     return {"field_id": str(field.id), "task_id": task.id}
 
 
-@router.post("/projects/{project_id}/collect", status_code=status.HTTP_202_ACCEPTED)
-def start_project_collection(project_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
-    """Поставить сбор данных по всем полям проекта.
+@router.post("/projects/{project_id}/process", status_code=status.HTTP_202_ACCEPTED)
+def start_project_processing(project_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
+    """Поставить обработку всех полей проекта.
 
     Поля обрабатываются независимыми задачами: отказ по одному полю не должен
     останавливать остальные.
@@ -200,7 +200,7 @@ def start_project_collection(project_id: uuid.UUID, db: Session = Depends(get_db
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="в проекте нет полей")
 
     tasks = [
-        {"field_id": str(f.id), "task_id": collect_field_data.delay(str(f.id)).id}
+        {"field_id": str(f.id), "task_id": process_field.delay(str(f.id)).id}
         for f in fields
     ]
     return {"project_id": str(project_id), "tasks": tasks}
