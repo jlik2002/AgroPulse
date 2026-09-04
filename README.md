@@ -11,7 +11,8 @@
 
 Ручная загрузка заранее подготовленного датасета в основном сценарии не требуется.
 
-> **Статус разработки.** Готов этап E0 — каркас сервиса и инфраструктура.
+> **Статус разработки.** Готовы этапы E0 (каркас и инфраструктура) и E1 (управление
+> полями и сбор спутниковых наблюдений из Google Earth Engine).
 > План работ и границы этапов: [`docs/PLAN.md`](docs/PLAN.md).
 
 ## Стек
@@ -78,6 +79,33 @@ docker compose run --rm api python /app/scripts/check_gee.py
 завершение означает, что доступ настроен полностью.
 
 Подробнее — [`secrets/README.md`](secrets/README.md). Каталог `secrets/` в репозиторий не попадает.
+
+## Пользовательский сценарий через API
+
+```bash
+API=http://localhost:8000/api
+
+# 1. Проект с общим периодом анализа
+PID=$(curl -s -X POST $API/projects -H 'Content-Type: application/json' \
+  -d '{"name":"Демо","period_from":"2023-04-01","period_to":"2023-10-01"}' \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+
+# 2. Поле: полигон GeoJSON, культура и дата посева необязательны
+FID=$(curl -s -X POST $API/projects/$PID/fields -H 'Content-Type: application/json' -d '{
+  "name":"Поле 1","crop":"кукуруза","sowing_date":"2023-04-25",
+  "geometry":{"type":"Polygon","coordinates":[[[-93.60,41.98],[-93.59,41.98],
+    [-93.59,41.988],[-93.60,41.988],[-93.60,41.98]]]}}' \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+
+# 3. Сбор данных — выполняется воркером, ответ приходит сразу
+curl -s -X POST $API/projects/$PID/collect
+
+# 4. Временной ряд со сводкой качества данных
+curl -s $API/fields/$FID/timeseries
+```
+
+Площадь поля считается геодезически при добавлении. Полигон проверяется на
+самопересечения и разумность размера — ответ 422 с понятным текстом.
 
 ## Структура репозитория
 
