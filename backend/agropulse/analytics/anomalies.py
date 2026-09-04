@@ -17,6 +17,8 @@ import logging
 from dataclasses import dataclass, field as dataclass_field
 from datetime import date
 
+import numpy as np
+
 from agropulse.analytics.climatology import Climatology, phase_of
 from agropulse.db.models import AnomalySeverity, ValueType
 
@@ -29,6 +31,14 @@ Z_CRITICAL = -2.0
 # этого числа суток. Иначе облачная неделя посреди засухи разрезала бы одно
 # событие на два.
 MERGE_GAP_DAYS = 12
+
+# Порог корреляции между фактической кривой сезона и климатической нормой поля.
+# Ниже него считаем, что сезон не совпал с историей по форме — вероятна смена
+# культуры в севообороте. Значение выбрано по замеру на четырёх полях двух
+# регионов: 0.93 и 0.97 у полей, повторяющих свою норму, против 0.55 и 0.69
+# у полей со сменой культуры. Выборка мала, порог подлежит уточнению.
+PHASE_MISMATCH_CORRELATION = 0.75
+MIN_POINTS_FOR_CORRELATION = 6
 
 # Событие должно опираться минимум на две точки: одна точка — это выброс.
 MIN_POINTS = 2
@@ -58,6 +68,8 @@ class AnomalyPeriod:
     points: int
     restored_fraction: float
     confidence: float
+    # Признак того, что сезон в целом не совпал по фазе с историей поля.
+    phase_mismatch: bool = False
     factors: dict = dataclass_field(default_factory=dict)
 
 
@@ -83,12 +95,31 @@ def detect(
         if z < Z_MODERATE:
             flagged.append((sample, z))
 
+    # Сезон мог целиком не совпасть с нормой по фазе. Тогда найденные
+    # отклонения — артефакт сравнения с другой культурой, а не угнетение.
+    mismatch, correlation = detect_phase_mismatch(samples, climatology)
+
     groups = _group(flagged)
 
     periods: list[AnomalyPeriod] = []
     for group in groups:
         period = _build_period(group)
         if period is not None:
+            # Корреляцию показываем всегда: она объясняет, почему вывод
+            # снижен или, наоборот, почему ему можно доверять.
+            period.factors["curve_correlation"] = correlation
+            if mismatch:
+                period.phase_mismatch = True
+                # factors уезжает в API как есть, поэтому признак кладём и туда.
+                period.factors["phase_mismatch"] = True
+                # Уверенность режем вдвое и добавляем гипотезу: вывод остаётся
+                # виден пользователю, но подан как сомнительный.
+                period.confidence = round(period.confidence * 0.5, 3)
+                period.factors.setdefault("hypotheses", []).insert(
+                    0,
+                    "динамика поля не совпадает с его историей: вероятна смена культуры "
+                    "в севообороте или другие сроки сева, а не угнетение растительности",
+                )
             periods.append(period)
 
     # Самые тяжёлые события — первыми: интерфейс показывает их пользователю в этом порядке.
@@ -182,3 +213,40 @@ def _factors(samples: list[SeriesSample]) -> dict:
         hypotheses.append("явных погодных причин не выявлено — требуется осмотр на месте")
     factors["hypotheses"] = hypotheses
     return factors
+
+
+def detect_phase_mismatch(
+    samples: list[SeriesSample], climatology: Climatology
+) -> tuple[bool, float | None]:
+    """Проверить, совпадает ли форма сезона с нормой поля.
+
+    Различие между угнетением и сменой культуры — не в глубине отклонения,
+    а в форме кривой. Угнетённое поле повторяет сезонный ход своей нормы,
+    просто идёт ниже. Поле, засеянное другой культурой, имеет пик в другое
+    время, и кривая расходится с нормой по форме.
+
+    Первая версия проверки сравнивала размах z-score в обе стороны и оказалась
+    негодной: при короткой истории норма узкая, и порог сверху превышали все
+    поля, включая эталонные. Проверка вырождалась в «есть глубокая аномалия»
+    и резала риск любому настоящему событию.
+
+    Мера — коэффициент корреляции Пирсона между фактическими значениями сезона
+    и ожидаемыми по норме. Возвращается вместе с вердиктом, чтобы пользователь
+    видел основание вывода.
+    """
+    pairs = [
+        (sample.ndvi, point.mean)
+        for sample in samples
+        if (point := climatology.estimate(phase_of(sample.date))) is not None
+    ]
+    if len(pairs) < MIN_POINTS_FOR_CORRELATION:
+        return False, None
+
+    actual = np.array([value for value, _ in pairs], dtype=float)
+    expected = np.array([value for _, value in pairs], dtype=float)
+    # Постоянный ряд корреляции не имеет: делить будет не на что.
+    if actual.std() == 0 or expected.std() == 0:
+        return False, None
+
+    correlation = float(np.corrcoef(actual, expected)[0, 1])
+    return correlation < PHASE_MISMATCH_CORRELATION, round(correlation, 3)

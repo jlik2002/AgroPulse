@@ -145,6 +145,17 @@ def assess(
 
     score = round(sum(breakdown.values()), 2)
 
+    # Если сезон не совпал по фазе с историей поля, найденные отклонения
+    # скорее означают смену культуры, чем угнетение. Балл снижается вдвое,
+    # а причина проговаривается пользователю: молча занижать риск нельзя.
+    phase_mismatch = any(a.phase_mismatch for a in anomalies)
+    if phase_mismatch:
+        score = round(score * 0.5, 2)
+        explanation.append(
+            "динамика сезона не совпадает с историей поля — вероятна смена культуры "
+            "в севообороте; оценка снижена, требуется подтверждение культуры"
+        )
+
     # --- доверие к выводу ---
     # Качество данных влияет не на риск, а на уверенность в нём: разрежённый
     # ряд не делает поле здоровым, он делает вывод менее надёжным.
@@ -153,6 +164,8 @@ def assess(
     confidence = round(
         max(0.05, 0.5 * coverage + 0.3 * validity + 0.2 * (1.0 - restored_fraction)), 3
     )
+    if phase_mismatch:
+        confidence = round(confidence * 0.5, 3)
 
     if score >= THRESHOLD_CRITICAL:
         status = FieldStatus.CRITICAL
