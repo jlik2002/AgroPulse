@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- AgroPulse ---
+# Локальные секреты: ключ сервис-аккаунта GEE и прочее
+secrets/*
+!secrets/.gitkeep
+!secrets/README.md
+# Артефакты запуска
+submission.csv
