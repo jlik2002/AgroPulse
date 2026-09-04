@@ -83,6 +83,7 @@ services:
     volumes:
       - ./backend:/app/backend        # автоперезагрузка при правках кода
       - ./scripts:/app/scripts        # служебные скрипты проверки
+      - ./data:/app/data              # вход и выход batch-инференса
       - ./secrets:/run/secrets:ro     # ключ сервис-аккаунта GEE
     ports:
       - "8000:8000"

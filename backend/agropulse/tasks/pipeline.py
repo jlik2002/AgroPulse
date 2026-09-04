@@ -23,11 +23,13 @@ from agropulse.analytics import anomalies as anomalies_module
 from agropulse.analytics import climatology as climatology_module
 from agropulse.analytics import risk as risk_module
 from agropulse.analytics.anomalies import SeriesSample
+from agropulse.analytics.climatology import phase_of
 from agropulse.config import get_settings
 from agropulse.db.models import (
     Anomaly,
     Field,
     FieldStatus,
+    ForecastRun,
     JobStatus,
     Observation,
     PipelineStage,
@@ -35,15 +37,20 @@ from agropulse.db.models import (
 )
 from agropulse.db.session import session_scope
 from agropulse.geometry import to_geojson
-from agropulse.ml.baseline import BaselineMLClient
-from agropulse.ml.client import ImputeRequest, SeriesPoint
+from agropulse.ml.client import (
+    ForecastRequest,
+    ForecastResult,
+    ImputeRequest,
+    SeriesPoint,
+    WeatherPoint,
+)
+from agropulse.ml.resolve import get_client
 from agropulse.providers import chain
 from agropulse.tasks import progress
 from agropulse.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
-SOURCE_BASELINE = "baseline"
 
 
 # ----------------------------------------------------------------------
@@ -246,9 +253,7 @@ def analyze_field(self, field_id: str) -> dict:
     # --- восстановление пропусков ---
     restored: list = []
     with progress.StageTracker(project_uuid, field_uuid, PipelineStage.GAP_FILLING) as stage:
-        # Пока задействован локальный baseline. Клиент внешнего сервиса моделей
-        # подключается на E5 через тот же интерфейс MLClient.
-        client = BaselineMLClient()
+        client = get_client()
         result = client.impute(
             ImputeRequest(
                 polygon_id=str(field_uuid),
@@ -257,12 +262,13 @@ def analyze_field(self, field_id: str) -> dict:
             )
         )
         restored = result.predictions
+        restored_source = result.source
         stage.message(
             f"восстановлено {len(restored)} из {len(gap_dates)} дат суточной сетки", 1.0
         )
 
         with session_scope() as db:
-            _store_restored(db, field_uuid, restored, weather_by_date)
+            _store_restored(db, field_uuid, restored, weather_by_date, restored_source)
 
     # --- климатология и аномалии ---
     with progress.StageTracker(project_uuid, field_uuid, PipelineStage.ANOMALIES) as stage:
@@ -292,9 +298,18 @@ def analyze_field(self, field_id: str) -> dict:
         # Норма строится по прошлым сезонам; текущий год исключается, иначе
         # аномалия вошла бы в собственную норму и замаскировала себя.
         in_period = [s for s in samples if period_from <= s.date <= period_to]
+
+        # Целевые фазы включают горизонт прогноза: без этого норма не покроет
+        # будущие даты и прогноз строить будет не от чего.
+        horizon_days = get_settings().forecast_horizon_days
+        last_observed = max((s.date for s in samples), default=period_to)
+        forecast_dates = [
+            last_observed + timedelta(days=offset) for offset in range(1, horizon_days + 1)
+        ]
+
         climatology = climatology_module.build(
             history=[(s.date, s.ndvi) for s in samples],
-            target_dates=[s.date for s in in_period],
+            target_dates=[s.date for s in in_period] + forecast_dates,
             sowing_date=sowing_date,
             exclude_year=period_to.year,
         )
@@ -306,8 +321,24 @@ def analyze_field(self, field_id: str) -> dict:
             1.0,
         )
 
-    # --- риск ---
+    # --- прогноз и риск ---
     with progress.StageTracker(project_uuid, field_uuid, PipelineStage.RISK_FORECAST) as stage:
+        forecast = _build_forecast(
+            client=client,
+            field_uuid=field_uuid,
+            samples=samples,
+            climatology=climatology,
+            sowing_date=sowing_date,
+            centroid=centroid,
+            horizon_days=horizon_days,
+        )
+        stage.message(
+            f"прогноз на {len(forecast.points)} суток, динамика {forecast.direction}"
+            if forecast.points
+            else f"прогноз не построен: {forecast.insufficient_reason}",
+            0.5,
+        )
+
         # В оценку идут z-score, а не сырые значения: см. analytics/risk.py
         recent = [(day, z) for day, z in zscores.items()]
         restored_in_period = sum(1 for s in in_period if s.value_type == ValueType.RESTORED)
@@ -329,6 +360,7 @@ def analyze_field(self, field_id: str) -> dict:
 
     with session_scope() as db:
         _store_analysis(db, field_uuid, periods, zscores, assessment, climatology)
+        _store_forecast(db, field_uuid, forecast)
 
     # Стадия визуализации на текущем этапе ничего не готовит: слои снимков
     # добавляются позже. Отмечаем её, чтобы список стадий был полным.
@@ -340,6 +372,8 @@ def analyze_field(self, field_id: str) -> dict:
         "risk_score": assessment.score,
         "anomalies": len(periods),
         "restored": len(restored),
+        "forecast_days": len(forecast.points),
+        "forecast_direction": forecast.direction,
     }
     progress.field_finished(project_uuid, field_uuid, assessment.status.value, summary)
 
@@ -347,7 +381,9 @@ def analyze_field(self, field_id: str) -> dict:
     return {"field_id": field_id, **summary}
 
 
-def _store_restored(db, field_id: uuid.UUID, predictions: list, weather_by_date: dict) -> None:
+def _store_restored(
+    db, field_id: uuid.UUID, predictions: list, weather_by_date: dict, source: str
+) -> None:
     """Заместить восстановленные значения.
 
     Сначала удаляем прежние: изменившийся набор наблюдений мог сделать часть
@@ -370,7 +406,7 @@ def _store_restored(db, field_id: uuid.UUID, predictions: list, weather_by_date:
                 "field_id": field_id,
                 "date": item.date,
                 "value_type": ValueType.RESTORED,
-                "source": SOURCE_BASELINE,
+                "source": source,
                 "ndvi_mean": item.value,
                 "confidence": item.confidence,
                 "temperature": temperature,
@@ -441,3 +477,103 @@ def process_field(self, field_id: str) -> dict:
         return collected
     analyzed = analyze_field.run(field_id)
     return {**collected, **analyzed}
+
+
+def _build_forecast(
+    client, field_uuid, samples, climatology, sowing_date, centroid, horizon_days
+):
+    """Построить прогноз NDVI на горизонт вперёд.
+
+    Норма нужна на будущие даты, а `Climatology` рассчитана по фазам,
+    встреченным в прошлом. Поэтому оценки для дат горизонта достаются
+    из той же таблицы фаз по дню года.
+    """
+    if not samples:
+        return _empty_forecast("нет наблюдений для прогноза")
+
+    last_date = max(sample.date for sample in samples)
+    horizon = [last_date + timedelta(days=offset) for offset in range(1, horizon_days + 1)]
+
+    norms: dict[date, tuple[float, float]] = {}
+    for day in horizon:
+        point = climatology.estimate(phase_of(day))
+        if point is not None:
+            norms[day] = (point.mean, point.std)
+
+    # Прогноз погоды — контекст для модели. Его отсутствие не блокирует расчёт.
+    weather = chain.fetch_weather_forecast(centroid[0], centroid[1], horizon_days)
+
+    return client.forecast(
+        ForecastRequest(
+            polygon_id=str(field_uuid),
+            observations=[
+                SeriesPoint(date=sample.date, primary_ndvi=sample.ndvi) for sample in samples
+            ],
+            horizon_days=horizon_days,
+            sowing_date=sowing_date,
+            weather_forecast=[
+                WeatherPoint(
+                    date=item.date,
+                    temperature=item.temperature,
+                    precipitation=item.precipitation,
+                )
+                for item in weather.items
+            ],
+            climatology=norms,
+        )
+    )
+
+
+def _empty_forecast(reason: str) -> ForecastResult:
+    """Пустой прогноз с указанием причины."""
+    return ForecastResult(
+        points=[], model_version="none", source="none", insufficient_reason=reason
+    )
+
+
+def _store_forecast(db, field_id: uuid.UUID, forecast) -> None:
+    """Записать прогноз: метаданные прогона и точки как наблюдения.
+
+    Точки лежат в той же таблице с value_type='forecast', поэтому график
+    и выгрузка CSV собираются одним запросом, без склейки двух источников.
+    """
+    db.execute(delete(ForecastRun).where(ForecastRun.field_id == field_id))
+    db.execute(
+        delete(Observation).where(
+            Observation.field_id == field_id,
+            Observation.value_type == ValueType.FORECAST,
+        )
+    )
+
+    db.add(
+        ForecastRun(
+            field_id=field_id,
+            horizon_days=len(forecast.points),
+            model_version=forecast.model_version,
+            direction=forecast.direction,
+            risk_level=forecast.risk_level,
+            confidence=forecast.confidence,
+            insufficient_reason=forecast.insufficient_reason,
+        )
+    )
+
+    if not forecast.points:
+        return
+
+    db.execute(
+        pg_insert(Observation).values(
+            [
+                {
+                    "field_id": field_id,
+                    "date": point.date,
+                    "value_type": ValueType.FORECAST,
+                    "source": forecast.source,
+                    "ndvi_mean": point.value,
+                    "ndvi_lo": point.low,
+                    "ndvi_hi": point.high,
+                    "confidence": forecast.confidence,
+                }
+                for point in forecast.points
+            ]
+        )
+    )

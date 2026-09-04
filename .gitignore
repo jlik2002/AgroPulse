@@ -224,3 +224,8 @@ secrets/*
 !secrets/README.md
 # Артефакты запуска
 submission.csv
+# Файлы обмена batch-инференса
+data/*
+!data/.gitkeep
+!data/README.md
+!data/demo/
