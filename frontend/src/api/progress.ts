@@ -43,6 +43,15 @@ const EMPTY: ProgressState = {
 
 const MAX_LOG = 40;
 
+// Событий за длинную обработку набегают сотни, а для отрисовки нужно только
+// последнее состояние каждой стадии. Держим окно: без него `useMemo`
+// пересобирал бы всё состояние по растущему массиву на каждое сообщение.
+const MAX_EVENTS = 400;
+
+// Столько неудачных подключений подряд считаем отказом: обычный обрыв сети
+// восстанавливается за одну-две попытки.
+const MAX_RECONNECTS = 5;
+
 export function useProjectProgress(projectId: string | undefined, enabled = true): ProgressState {
   const [snapshot, setSnapshot] = useState<ProgressSnapshot | null>(null);
   const [events, setEvents] = useState<StageEvent[]>([]);
@@ -53,6 +62,15 @@ export function useProjectProgress(projectId: string | undefined, enabled = true
 
   useEffect(() => {
     if (!projectId || !enabled) return;
+
+    // Состояние принадлежит конкретному проекту. Без сброса переход в другой
+    // проект («Новый анализ» на сводке) подмешивал бы в `byField` чужие поля,
+    // а лента событий продолжалась бы предыдущей историей.
+    setSnapshot(null);
+    setEvents([]);
+    setFinished(new Set());
+    logRef.current = [];
+    setLogVersion((value) => value + 1);
 
     const source = new EventSource(apiUrl(`/projects/${projectId}/events`));
 
@@ -67,7 +85,7 @@ export function useProjectProgress(projectId: string | undefined, enabled = true
       const payload = JSON.parse((event as MessageEvent).data);
       if (payload.type === "stage") {
         const stage = payload as StageEvent;
-        setEvents((previous) => [...previous, stage]);
+        setEvents((previous) => [...previous, stage].slice(-MAX_EVENTS));
         pushLog(logRef, {
           at: stage.at,
           fieldId: stage.field_id,
@@ -92,7 +110,19 @@ export function useProjectProgress(projectId: string | undefined, enabled = true
       }
     });
 
-    source.addEventListener("error", () => setConnected(false));
+    // Браузер переподключает EventSource сам, но если проект удалён, сервер
+    // будет отвечать 404 бесконечно. После нескольких неудач подряд
+    // закрываем поток: держать вечный цикл запросов бессмысленно.
+    let failures = 0;
+    source.addEventListener("error", () => {
+      setConnected(false);
+      failures += 1;
+      if (failures >= MAX_RECONNECTS) source.close();
+    });
+
+    source.addEventListener("snapshot", () => {
+      failures = 0;
+    });
 
     return () => {
       source.close();

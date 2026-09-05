@@ -589,17 +589,28 @@ class FieldPipeline:
         в логах, потому что текст исключения может раскрывать внутреннее
         устройство сервиса.
         """
+        project_id: uuid.UUID | None = None
         try:
             with unit_of_work() as uow:
                 field = uow.fields.get(field_id)
                 if field is None:
                     return
+                project_id = field.project_id
                 field.status = FieldStatus.FAILED
                 field.data_quality = {**(field.data_quality or {}), "last_error": error_code}
         except Exception:
             # Отдельно логируем: если и это не удалось, диагностировать
             # застрявшее поле придётся по логам задачи.
             logger.exception("field_mark_failed_error", extra={"field_id": str(field_id)})
+            return
+
+        # Поле завершилось — пусть и неудачно. Без этого события интерфейс
+        # считает его всё ещё обрабатывающимся: полоса прогресса не доходит
+        # до конца, а оценка оставшегося времени не исчезает никогда.
+        if project_id is not None:
+            progress.field_finished(
+                project_id, field_id, FieldStatus.FAILED.value, {"error": error_code}
+            )
 
     # ------------------------------------------------------------------
 
@@ -740,6 +751,7 @@ def _to_forecast_run(field_id: uuid.UUID, forecast: ForecastResult) -> ForecastR
         risk_level=forecast.risk_level,
         confidence=forecast.confidence,
         insufficient_reason=forecast.insufficient_reason,
+        factors=forecast.factors,
     )
 
 

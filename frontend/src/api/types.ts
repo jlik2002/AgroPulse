@@ -41,6 +41,8 @@ export interface Field {
   crop: string | null;
   sowing_date: string | null;
   source: FieldSource;
+  /** Ссылка на объект открытого источника, если контур выбран, а не нарисован. */
+  external_ref: string | null;
   status: FieldStatus;
   risk_score: number | null;
   created_at: string;
@@ -65,13 +67,25 @@ export interface Observation {
   missing_reason: string | null;
 }
 
+/** Сводка качества данных ряда. Ключи перечислены явно, а не через
+ *  `Record<string, number>`: свободный индекс не ловит опечатку в имени,
+ *  и блок, читающий несуществующий ключ, молча не показывается. */
+export interface TimeseriesStats {
+  total_points: number;
+  observed: number;
+  restored: number;
+  forecast: number;
+  scenes_with_ndvi: number;
+  mean_valid_fraction: number | null;
+}
+
 export interface Timeseries {
   field_id: string;
   field_name: string;
   period_from: string;
   period_to: string;
   observations: Observation[];
-  stats: Record<string, number | null>;
+  stats: TimeseriesStats;
 }
 
 export interface Anomaly {

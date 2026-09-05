@@ -51,16 +51,20 @@ export function ProcessingPage() {
         field,
         index: index + 1,
         state: progress.byField[field.id] as FieldProgress | undefined,
-        // Поле считается готовым и по событию шины, и по статусу в базе:
+        // Поле считается завершённым и по событию шины, и по статусу в базе:
         // событие может быть потеряно, а статус переживает перезагрузку.
-        ready:
-          progress.finished.has(field.id) ||
-          (field.status !== "pending" && field.status !== "failed"),
+        // Ошибка — тоже завершение: иначе прогресс никогда не дойдёт до конца,
+        // а «осталось около N минут» будет висеть вечно.
+        ready: progress.finished.has(field.id) || field.status !== "pending",
+        failed: field.status === "failed" || Boolean(progress.byField[field.id]?.failed),
       })),
     [fields, progress.byField, progress.finished],
   );
 
   const readyCount = rows.filter((row) => row.ready).length;
+  // В счётчике «готово» упавшие поля не считаются готовыми, но опрос
+  // статусов останавливает именно завершённость, а не успешность.
+  const successCount = rows.filter((row) => row.ready && !row.failed).length;
   const overall = rows.length
     ? Math.round(
         rows.reduce((sum, row) => sum + (row.ready ? 100 : (row.state?.percent ?? 0)), 0) /
@@ -101,7 +105,7 @@ export function ProcessingPage() {
 
         <div className="w-[420px] shrink-0">
           <p className="text-[15px] text-ink">
-            <span className="tnum font-medium">{readyCount}</span> из{" "}
+            <span className="tnum font-medium">{successCount}</span> из{" "}
             <span className="tnum font-medium">{rows.length}</span>{" "}
             {plural(rows.length, "поля", "полей", "полей")} готово
           </p>
@@ -156,7 +160,7 @@ export function ProcessingPage() {
                 <div className="mt-3.5 flex items-center gap-3">
                   <Progress
                     value={row.ready ? 100 : (row.state?.percent ?? 0)}
-                    tone={row.state?.failed ? "danger" : "brand"}
+                    tone={row.failed ? "danger" : "brand"}
                     className="flex-1"
                   />
                   <span className="w-11 text-right text-[14px] font-medium text-ink tnum">
@@ -164,7 +168,7 @@ export function ProcessingPage() {
                   </span>
                 </div>
 
-                {row.ready ? (
+                {row.ready && !row.failed ? (
                   <Button
                     className="mt-4"
                     onClick={(event) => {
@@ -176,7 +180,10 @@ export function ProcessingPage() {
                   </Button>
                 ) : (
                   <p className="mt-2.5 text-[13.5px] text-ink-muted">
-                    {row.state?.current?.stage_title ?? "Ожидает очереди"}
+                    {row.failed
+                      ? (row.state?.current?.error ??
+                        "Обработка прервана — попробуйте запустить анализ снова")
+                      : (row.state?.current?.stage_title ?? "Ожидает очереди")}
                   </p>
                 )}
               </div>
@@ -197,7 +204,11 @@ export function ProcessingPage() {
                     key={state.group.key}
                     state={state}
                     last={index === list.length - 1}
-                    forcedDone={activeRow.ready}
+                    // Реальный статус стадии не перекрашиваем: поле, завершившееся
+                    // с недостаточными данными, не должно показывать пять зелёных
+                    // галочек. Достраиваем только поля без истории прогресса —
+                    // те, что обработаны в прошлой сессии, а jobs уже вычищены.
+                    assumeDone={activeRow.ready && !activeRow.failed && !activeRow.state}
                   />
                 ))}
               </div>
@@ -225,8 +236,8 @@ export function ProcessingPage() {
   );
 }
 
-function StatusPill({ row }: { row: { ready: boolean; state?: FieldProgress } }) {
-  if (row.state?.failed) {
+function StatusPill({ row }: { row: { ready: boolean; failed: boolean; state?: FieldProgress } }) {
+  if (row.failed) {
     return (
       <span className="flex shrink-0 items-center gap-2 text-[14px] text-danger-ink">
         <CircleAlert size={19} />
@@ -255,14 +266,14 @@ function StatusPill({ row }: { row: { ready: boolean; state?: FieldProgress } })
 function StageRow({
   state,
   last,
-  forcedDone,
+  assumeDone,
 }: {
   state: GroupState;
   last: boolean;
-  forcedDone: boolean;
+  assumeDone: boolean;
 }) {
   const Icon = ICONS[state.group.icon];
-  const status = forcedDone ? "done" : state.status;
+  const status = assumeDone && state.status === "pending" ? "done" : state.status;
 
   return (
     <div className={cn("flex gap-4 px-5 py-4", !last && "border-b border-line-soft")}>

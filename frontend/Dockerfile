@@ -18,7 +18,12 @@ RUN npm run build
 
 FROM nginx:1.27-alpine AS runtime
 
-COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
+COPY frontend/nginx.conf.template /etc/nginx/templates/default.conf.template
+
+# Значение по умолчанию для compose; в Kubernetes переопределяется переменной.
+# Фильтр обязателен: без него envsubst подставит любую переменную окружения
+# и может съесть служебные переменные nginx вроде $host и $scheme.
+ENV API_UPSTREAM=http://api:8000     NGINX_ENVSUBST_FILTER=API_UPSTREAM
 COPY --from=build /app/dist /usr/share/nginx/html
 
 EXPOSE 80

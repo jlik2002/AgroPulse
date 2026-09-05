@@ -38,7 +38,10 @@ import { dataQualityTitle, riskTone, SEVERITY_TITLES, statusOf } from "@/lib/sta
 export function SummaryPage() {
   const navigate = useNavigate();
   const { project, fields, indexOf } = useProjectContext();
-  const summary = useProjectSummary(project.id, { refetchInterval: 20_000 });
+  // Периодического опроса нет намеренно: пока идёт расчёт, пользователь
+  // находится на экране обработки с потоком событий, а готовая сводка
+  // меняется только по его же действию.
+  const summary = useProjectSummary(project.id);
   const [hovered, setHovered] = useState<string | null>(null);
 
   const geometryOf = useMemo(
@@ -257,12 +260,20 @@ function PriorityCard({
 }) {
   const style = statusOf(row.status);
   const anomaly = row.worst_anomaly;
+  const quality = {
+    title: dataQualityTitle(row.mean_valid_fraction),
+    good: (row.mean_valid_fraction ?? 0) >= 0.8,
+  };
 
   const reason = anomaly
     ? `NDVI ниже нормы ${anomaly.duration_days} ${daysWord(anomaly.duration_days)} подряд`
     : row.status === "insufficient_data"
       ? "Пригодных снимков недостаточно для вывода"
-      : "Отклонений от ожидаемой динамики не найдено";
+      : row.status === "pending"
+        ? "Поле ещё не обработано"
+        : row.status === "failed"
+          ? "Обработка прервана — запустите анализ повторно"
+          : "Отклонений от ожидаемой динамики не найдено";
 
   return (
     <div
@@ -310,9 +321,15 @@ function PriorityCard({
           {reason}
         </p>
         <div className="flex items-center gap-2.5">
-          <CircleCheck size={17} className="shrink-0 text-ok" />
+          {/* Иконка следует за подписью: зелёная галочка рядом со словом
+              «низкое» противоречила бы собственному тексту. */}
+          {quality.good ? (
+            <CircleCheck size={17} className="shrink-0 text-ok" />
+          ) : (
+            <CircleAlert size={17} className="shrink-0 text-warn" />
+          )}
           <span className="text-[14px] text-ink-soft">
-            Качество данных: {dataQualityTitle(row.mean_valid_fraction)}
+            Качество данных: {quality.title}
             {row.mean_valid_fraction !== null
               ? ` · покрытие ${formatPercent(row.mean_valid_fraction)}`
               : ""}

@@ -3,6 +3,9 @@ import { cn } from "@/lib/cn";
 export interface SegmentedOption<T extends string> {
   value: T;
   label: string;
+  /** Пункт остаётся в раскладке, но не выбирается. */
+  disabled?: boolean;
+  title?: string;
 }
 
 interface SegmentedProps<T extends string> {
@@ -37,11 +40,18 @@ export function Segmented<T extends string>({
             role="tab"
             type="button"
             aria-selected={active}
+            aria-disabled={option.disabled}
+            disabled={option.disabled}
+            title={option.title}
             onClick={() => onChange(option.value)}
             className={cn(
               "rounded-lg font-medium transition-colors",
               size === "sm" ? "px-2.5 py-1 text-[12px]" : "px-3.5 py-1.5 text-[13px]",
-              active ? "bg-brand-800 text-white" : "text-ink-soft hover:bg-[#F3F4F6]",
+              active
+                ? "bg-brand-800 text-white"
+                : option.disabled
+                  ? "cursor-not-allowed text-ink-faint"
+                  : "text-ink-soft hover:bg-[#F3F4F6]",
             )}
           >
             {option.label}

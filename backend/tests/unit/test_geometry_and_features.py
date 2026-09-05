@@ -203,6 +203,43 @@ def test_stub_confidence_falls_with_distance_from_observations() -> None:
     assert by_date[near].confidence > by_date[far].confidence
 
 
+def test_forecast_reports_the_values_it_was_built_from() -> None:
+    """Интерфейс объясняет прогноз его собственными причинами.
+
+    Без этих величин раздел «Что влияет на прогноз» пришлось бы наполнять
+    разложением текущего риска — то есть объяснять будущее прошлым.
+    """
+    from agropulse.ml.baseline import BaselineMLClient
+    from agropulse.ml.client import ForecastRequest
+
+    observations = _series(8)
+    last = observations[-1].date
+    # Норма покрывает горизонт и лежит заметно выше факта: поле отстаёт.
+    climatology = {
+        last + timedelta(days=offset): (0.9, 0.05) for offset in range(1, 16)
+    }
+    climatology.update({point.date: (0.9, 0.05) for point in observations})
+
+    result = BaselineMLClient().forecast(
+        ForecastRequest(
+            polygon_id="p",
+            observations=observations,
+            horizon_days=14,
+            climatology=climatology,
+        )
+    )
+
+    assert result.points
+    assert result.factors is not None
+    assert result.factors["deviation_from_norm"] < 0
+    assert result.factors["staleness_days"] == 1
+    assert result.factors["observations_used"] == len(observations)
+    assert "change_over_horizon" in result.factors
+    # Отставание глубже 0.10 — модель обязана назвать риск высоким,
+    # и раздел «Что влияет на прогноз» опирается на те же пороги.
+    assert result.risk_level == "high"
+
+
 def test_stub_declines_forecast_without_climatology() -> None:
     """Экстраполяция тренда в отрыве от сезонной кривой предсказала бы рост
     посреди уборки урожая."""

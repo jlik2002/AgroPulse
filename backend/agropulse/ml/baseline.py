@@ -238,6 +238,16 @@ class BaselineMLClient:
             risk_level=risk_level,
             # Уверенность падает с устареванием последнего наблюдения.
             confidence=round(max(0.1, 1.0 - staleness / (MAX_STALENESS_DAYS + 1)), 3),
+            # Ровно те величины, на которых построен прогноз. Отдаём их наружу,
+            # чтобы интерфейс объяснял прогноз его собственными причинами,
+            # а не разложением риска текущего состояния.
+            factors={
+                "deviation_from_norm": round(deviation, 4),
+                "staleness_days": staleness,
+                "change_over_horizon": round(change, 4),
+                "observations_used": len(known),
+                "horizon_days": len(points),
+            },
         )
 
     def _no_forecast(self, reason: str) -> ForecastResult:

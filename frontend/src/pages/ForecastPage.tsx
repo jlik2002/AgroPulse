@@ -1,4 +1,5 @@
 import {
+  Clock,
   Cloud,
   CloudRain,
   CloudSun,
@@ -28,6 +29,7 @@ import { ErrorState, Loading, Notice } from "@/components/ui/State";
 import { useFieldAnalysis } from "@/hooks/useFieldAnalysis";
 import { cn } from "@/lib/cn";
 import {
+  daysWord,
   formatDate,
   formatDateRangeShort,
   formatDayMonth,
@@ -60,8 +62,14 @@ export function ForecastPage() {
   const risk = analysis.risk.data;
   const points = analysis.series.forecast;
 
-  const factors = useMemo(() => buildFactors(risk?.breakdown ?? null), [risk?.breakdown]);
-  const dayRisk = useMemo(() => buildDayRisk(points), [points]);
+  const factors = useMemo(
+    () => buildFactors(forecast?.factors ?? null, risk?.breakdown ?? null),
+    [forecast?.factors, risk?.breakdown],
+  );
+  const dayRisk = useMemo(
+    () => buildDayRisk(points, forecast?.risk_level ?? null),
+    [points, forecast?.risk_level],
+  );
 
   if (analysis.isPending) return <Loading text="Загружаем прогноз" />;
   if (analysis.isError || !field) {
@@ -208,7 +216,14 @@ export function ForecastPage() {
 
           <div className="space-y-4">
             <Card>
-              <CardHeader title="Что влияет на прогноз" />
+              {/* Заголовок следует за источником: если прогон прогноза не сохранил
+                  своих факторов, показывается разложение текущего риска, и
+                  называть его причинами прогноза было бы неверно. */}
+              <CardHeader
+                title={
+                  forecast?.factors ? "Что влияет на прогноз" : "Что влияет на оценку риска"
+                }
+              />
               <ul className="space-y-3.5 p-5 pt-4">
                 {factors.length === 0 ? (
                   <li className="text-[14px] text-ink-muted">
@@ -261,7 +276,7 @@ export function ForecastPage() {
                 {analysis.nextScene ? (
                   <p>Следующий снимок ожидается около {formatDate(analysis.nextScene)}</p>
                 ) : null}
-                {(analysis.timeseries.data?.stats?.restored_points ?? 0) > 0 ? (
+                {(analysis.timeseries.data?.stats.restored ?? 0) > 0 ? (
                   <p>
                     Часть ряда восстановлена моделью — надёжность прогноза ограничена качеством
                     исходных наблюдений
@@ -286,7 +301,11 @@ export function ForecastPage() {
               {points.map((point) => {
                 const tier = dayRisk.get(point.date) ?? "Средний";
                 const isPeak =
-                  peak !== null && point.date >= peak.from && point.date <= peak.to && tier === "Высокий";
+                  level === "high" &&
+                  peak !== null &&
+                  point.date >= peak.from &&
+                  point.date <= peak.to &&
+                  tier === "Высокий";
                 return (
                   <DayCard key={point.date} point={point} tier={tier} peak={isPeak} />
                 );
@@ -412,9 +431,54 @@ interface FactorRow {
   strength: string;
 }
 
-/** Что влияет на прогноз — раскрытие вклада факторов составного риска.
- *  Показываем только те, что действительно набрали вес. */
-function buildFactors(breakdown: Record<string, number> | null): FactorRow[] {
+/** Что влияет на прогноз.
+ *
+ *  Основной источник — факторы самого прогона прогноза: текущее отставание от
+ *  нормы, ожидаемое изменение за горизонт и свежесть последнего наблюдения.
+ *  Именно из них модель и строит линию. Разложение составного риска берётся
+ *  только как запасной вариант — оно объясняет текущее состояние, а не будущее,
+ *  и карточка в этом случае называется иначе. */
+function buildFactors(
+  forecastFactors: Record<string, unknown> | null,
+  breakdown: Record<string, number> | null,
+): FactorRow[] {
+  if (forecastFactors) {
+    const rows: FactorRow[] = [];
+    const deviation = numberOf(forecastFactors.deviation_from_norm);
+    const change = numberOf(forecastFactors.change_over_horizon);
+    const staleness = numberOf(forecastFactors.staleness_days);
+
+    if (deviation !== null) {
+      rows.push({
+        key: "deviation",
+        title: `Отклонение от нормы: ${formatNumber(deviation, 2)}`,
+        icon: deviation < 0 ? <TrendingDown size={18} /> : <TrendingUp size={18} />,
+        tone: deviation < 0 ? "bg-danger-soft text-danger" : "bg-ok-soft text-brand-700",
+        // Пороги те же, по которым модель назначает уровень риска прогноза.
+        strength: influence(Math.abs(deviation), 0.1, 0.05),
+      });
+    }
+    if (change !== null) {
+      rows.push({
+        key: "change",
+        title: `Ожидаемое изменение за горизонт: ${formatNumber(change, 2)}`,
+        icon: change < 0 ? <TrendingDown size={18} /> : <TrendingUp size={18} />,
+        tone: "bg-warn-soft text-warn",
+        strength: influence(Math.abs(change), 0.05, 0.02),
+      });
+    }
+    if (staleness !== null) {
+      rows.push({
+        key: "staleness",
+        title: `Последнему наблюдению ${staleness} ${daysWord(staleness)}`,
+        icon: <Clock size={18} />,
+        tone: "bg-[#F1F2F4] text-ink-soft",
+        strength: influence(staleness, 15, 7),
+      });
+    }
+    if (rows.length > 0) return rows;
+  }
+
   if (!breakdown) return [];
 
   const meta: Record<string, { title: string; icon: React.ReactNode; tone: string }> = {
@@ -469,14 +533,27 @@ function buildFactors(breakdown: Record<string, number> | null): FactorRow[] {
     });
 }
 
-/** Уровень риска по дням: относительный внутри горизонта прогноза.
- *  Абсолютной шкалы у прогноза нет, поэтому подпись сравнительная. */
-function buildDayRisk(points: Observation[]): Map<string, string> {
+/** Уровень риска по дням.
+ *
+ *  Абсолютную оценку даёт бэкенд — это `risk_level` прогона, посчитанный по
+ *  отставанию от нормы. Внутри горизонта прогноза мы только упорядочиваем дни
+ *  по ожидаемому NDVI. Нормировать по min/max самого горизонта нельзя: при
+ *  прогнозе 0,78 → 0,82 треть дней всё равно попадала бы в «Высокий», и
+ *  благополучное поле краснело бы без всякого повода. */
+function buildDayRisk(points: Observation[], level: string | null): Map<string, string> {
+  const result = new Map<string, string>();
   const values = points
     .map((point) => point.ndvi_mean)
     .filter((value): value is number => value !== null);
-  const result = new Map<string, string>();
   if (values.length === 0) return result;
+
+  // Шкала подписей соответствует уровню риска всего прогноза.
+  const scale =
+    level === "high"
+      ? ["Высокий", "Повышенный", "Средний"]
+      : level === "moderate"
+        ? ["Повышенный", "Средний", "Средний"]
+        : ["Низкий", "Низкий", "Низкий"];
 
   const min = Math.min(...values);
   const max = Math.max(...values);
@@ -485,9 +562,21 @@ function buildDayRisk(points: Observation[]): Map<string, string> {
   for (const point of points) {
     if (point.ndvi_mean === null) continue;
     const ratio = (point.ndvi_mean - min) / span;
-    result.set(point.date, ratio <= 0.33 ? "Высокий" : ratio <= 0.66 ? "Повышенный" : "Средний");
+    result.set(point.date, ratio <= 0.33 ? scale[0] : ratio <= 0.66 ? scale[1] : scale[2]);
   }
   return result;
+}
+
+/** Значение фактора приезжает из JSON, поэтому тип не гарантирован. */
+function numberOf(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/** Словесная сила влияния по двум порогам. */
+function influence(value: number, strong: number, medium: number): string {
+  if (value >= strong) return "сильное влияние";
+  if (value >= medium) return "среднее влияние";
+  return "слабое влияние";
 }
 
 function confidenceWord(confidence: number | null): string {

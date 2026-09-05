@@ -105,6 +105,7 @@ export function FieldPage() {
               fieldId={field.id}
               fieldName={field.name}
               observations={analysis.series.all}
+              history={analysis.timeseries.data.observations}
               periodFrom={analysis.timeseries.data.period_from}
               periodTo={project.period_to}
             />

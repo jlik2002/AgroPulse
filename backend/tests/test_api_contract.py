@@ -152,7 +152,12 @@ def test_create_field_computes_area_and_returns_geojson(client, created_project)
 
 
 def test_field_response_hides_internal_columns(client, created_field) -> None:
-    """Ответ не должен раскрывать служебные поля модели хранения."""
+    """Ответ не должен раскрывать служебные поля модели хранения.
+
+    `external_ref` в список входит намеренно: это ссылка на объект открытого
+    источника, а не деталь хранения. По ней интерфейс понимает, какие контуры
+    уже добавлены, и не предлагает их повторно.
+    """
     assert set(created_field) == {
         "id",
         "project_id",
@@ -162,10 +167,29 @@ def test_field_response_hides_internal_columns(client, created_field) -> None:
         "crop",
         "sowing_date",
         "source",
+        "external_ref",
         "status",
         "risk_score",
         "created_at",
     }
+
+
+def test_field_keeps_reference_to_open_source_contour(client, created_project) -> None:
+    """Контур, выбранный из OSM, сохраняет ссылку на исходный объект."""
+    response = client.post(
+        f"/api/projects/{created_project['id']}/fields",
+        json={
+            "name": "Контур из OSM",
+            "geometry": SQUARE_POLYGON,
+            "source": "osm",
+            "external_ref": "way/1462647786",
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["source"] == "osm"
+    assert body["external_ref"] == "way/1462647786"
 
 
 def test_create_field_rejects_self_intersecting_polygon(client, created_project) -> None:

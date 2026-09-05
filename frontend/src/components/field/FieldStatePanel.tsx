@@ -10,8 +10,20 @@ import { Info } from "lucide-react";
 
 export type LayerMode = "rgb" | "ndvi" | "ndmi";
 
+/** Слой RGB отключён до появления настоящих тайлов снимков.
+ *
+ *  Сервис считает индексы как среднее по контуру и растры в хранилище не
+ *  выкладывает. Прозрачный контур поверх обзорной подложки Esri показывал бы
+ *  одну и ту же недатированную мозаику для любой даты — и в режиме сравнения
+ *  две «разные» даты выглядели бы одинаково. Пункт оставлен в раскладке,
+ *  чтобы не менять состав переключателя, когда слой появится. */
 export const LAYER_OPTIONS = [
-  { value: "rgb" as const, label: "RGB" },
+  {
+    value: "rgb" as const,
+    label: "RGB",
+    disabled: true,
+    title: "Снимок в естественных цветах за дату пока недоступен",
+  },
   { value: "ndvi" as const, label: "NDVI" },
   { value: "ndmi" as const, label: "NDMI" },
 ];
@@ -67,7 +79,7 @@ export function FieldStatePanel({
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[500] p-4">
         {mode === "rgb" ? (
           <div className="pointer-events-auto inline-flex items-center gap-2 rounded-lg bg-white/95 px-3.5 py-2 text-[13px] text-ink-soft shadow-card">
-            Снимок в естественных цветах
+            Обзорная подложка: снимка за выбранную дату нет
           </div>
         ) : (
           <div className="pointer-events-auto inline-block rounded-xl bg-white/95 px-4 py-3 shadow-card">

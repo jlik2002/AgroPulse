@@ -24,6 +24,8 @@ interface ReportPreviewProps {
   deviation: number | null;
   peakRisk: { from: string; to: string } | null;
   totalPages: number;
+  /** Выбранные разделы: предпросмотр должен меняться вместе с чекбоксами. */
+  sections: string[];
 }
 
 /** Предпросмотр первой страницы отчёта.
@@ -43,6 +45,7 @@ export function ReportPreview({
   deviation,
   peakRisk,
   totalPages,
+  sections,
 }: ReportPreviewProps) {
   if (!field) return null;
   const style = statusOf(risk?.status ?? field.status);
@@ -65,27 +68,31 @@ export function ReportPreview({
         {formatPeriod(periodFrom, periodTo)}
       </p>
 
-      <div
-        className={cn(
-          "mt-4 flex items-center gap-2.5 rounded-xl border px-4 py-2.5 text-[13.5px]",
+      {sections.includes("state") ? (
+        <div
+          className={cn(
+            "mt-4 flex items-center gap-2.5 rounded-xl border px-4 py-2.5 text-[13.5px]",
           risk?.status === "critical"
             ? "border-danger-line bg-danger-tint text-danger-ink"
             : risk?.status === "attention"
               ? "border-warn-line bg-warn-soft text-warn-ink"
-              : "border-ok-line bg-ok-soft text-ok-ink",
-        )}
-      >
-        <span className="font-medium">{style.title}</span>
-        {risk?.score !== null && risk?.score !== undefined ? (
-          <>
-            <span>·</span>
-            <span>риск {Math.round(risk.score)} / 100</span>
-          </>
-        ) : null}
-      </div>
+                : "border-ok-line bg-ok-soft text-ok-ink",
+          )}
+        >
+          <span className="font-medium">{style.title}</span>
+          {risk?.score !== null && risk?.score !== undefined ? (
+            <>
+              <span>·</span>
+              <span>риск {Math.round(risk.score)} / 100</span>
+            </>
+          ) : null}
+        </div>
+      ) : null}
 
-      <h2 className="mt-6 text-[16px] font-semibold">Краткий вывод</h2>
-      <div className="mt-2 space-y-1 text-[13px] leading-relaxed text-ink-soft">
+      {sections.includes("summary") ? (
+        <>
+          <h2 className="mt-6 text-[16px] font-semibold">Краткий вывод</h2>
+          <div className="mt-2 space-y-1 text-[13px] leading-relaxed text-ink-soft">
         {anomaly ? (
           <p>
             С {formatDayMonthLong(anomaly.start_date)} наблюдается устойчивое снижение NDVI
@@ -105,32 +112,44 @@ export function ReportPreview({
             {formatDate(peakRisk.to)}.
           </p>
         ) : null}
-        {risk?.insufficient_reason ? <p>{risk.insufficient_reason}</p> : null}
-      </div>
+            {risk?.insufficient_reason ? <p>{risk.insufficient_reason}</p> : null}
+            <p className="pt-1 text-[11.5px] italic text-ink-muted">
+              {/* В самом документе этот абзац пишет языковая модель по проверенным
+                  числам. Здесь показан его состав, а не итоговый текст — обещать
+                  дословное совпадение было бы неправдой. */}
+              Итоговая формулировка составляется при сборке PDF по этим же значениям.
+            </p>
+          </div>
+        </>
+      ) : null}
 
       <div className="mt-6 grid flex-1 grid-cols-2 gap-5 border-t border-line-soft pt-5">
-        <div className="flex min-h-0 flex-col">
+        {sections.includes("state") ? (
+          <div className="flex min-h-0 flex-col">
           <h3 className="text-[13px] font-semibold">
             NDVI{latest ? ` (${formatDate(latest.date)})` : ""}
           </h3>
-          <div className="mt-2 min-h-0 flex-1">
-            <FieldStatePanel field={field} observation={latest} mode="ndvi" height={210} />
+            <div className="mt-2 min-h-0 flex-1">
+              <FieldStatePanel field={field} observation={latest} mode="ndvi" height={210} />
+            </div>
           </div>
-        </div>
+        ) : null}
 
-        <div className="flex min-h-0 flex-col">
-          <h3 className="text-[13px] font-semibold">Динамика среднего NDVI</h3>
-          <div className="mt-1 min-h-0 flex-1">
-            <NdviChart
-              observations={observations}
-              anomalies={anomaly ? [anomaly] : []}
-              showRestored={false}
-              showForecast={false}
-              height={190}
-              compact
-            />
+        {sections.includes("dynamics") ? (
+          <div className="flex min-h-0 flex-col">
+            <h3 className="text-[13px] font-semibold">Динамика среднего NDVI</h3>
+            <div className="mt-1 min-h-0 flex-1">
+              <NdviChart
+                observations={observations}
+                anomalies={anomaly ? [anomaly] : []}
+                showRestored={false}
+                showForecast={false}
+                height={190}
+                compact
+              />
+            </div>
           </div>
-        </div>
+        ) : null}
       </div>
 
       <footer className="mt-5 flex items-center justify-between border-t border-line-soft pt-3 text-[11px] text-ink-muted">

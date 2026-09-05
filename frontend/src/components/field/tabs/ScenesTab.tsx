@@ -1,7 +1,7 @@
 import { ArrowLeftRight, ChevronLeft, ChevronRight, CircleAlert, TrendingUp } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { Field, Observation } from "@/api/types";
+import type { Anomaly, Field, Observation } from "@/api/types";
 import type { FieldAnalysis } from "@/hooks/useFieldAnalysis";
 import { FieldStatePanel, LAYER_OPTIONS, type LayerMode } from "@/components/field/FieldStatePanel";
 import { Button } from "@/components/ui/Button";
@@ -141,15 +141,14 @@ export function ScenesTab({ analysis, focus, onShowOnChart }: ScenesTabProps) {
 
       {/* --- панели сравнения --- */}
       <div className={cn("relative grid gap-4", compare ? "grid-cols-2" : "grid-cols-1")}>
-        <ScenePane field={field} scene={left} mode={mode} label="До аномалии" tone="ok" />
+        <ScenePane field={field} scene={left} mode={mode} role={roleOf(left, scenes, worst)} />
         {compare ? (
           <>
             <ScenePane
               field={field}
               scene={right}
               mode={mode}
-              label="Последнее наблюдение"
-              tone="danger"
+              role={roleOf(right, scenes, worst)}
             />
             <button
               type="button"
@@ -221,14 +220,12 @@ function ScenePane({
   field,
   scene,
   mode,
-  label,
-  tone,
+  role,
 }: {
   field: Field;
   scene: Observation;
   mode: LayerMode;
-  label: string;
-  tone: "ok" | "danger";
+  role: SceneRole | null;
 }) {
   return (
     <div className="relative">
@@ -236,9 +233,11 @@ function ScenePane({
       <div className="pointer-events-none absolute left-4 top-4 z-[500] rounded-xl bg-white/95 px-4 py-3 shadow-card">
         <div className="flex items-center gap-3">
           <span className="text-[16px] font-semibold text-ink">{formatDate(scene.date)}</span>
-          <Chip size="sm" className={tone === "ok" ? "bg-ok-soft text-ok-ink" : "bg-danger-soft text-danger-ink"}>
-            {label}
-          </Chip>
+          {role ? (
+            <Chip size="sm" className={role.chip}>
+              {role.title}
+            </Chip>
+          ) : null}
         </div>
         <p className="mt-1 text-[13px] text-ink-soft">
           Облачность {formatPercent(scene.cloud_fraction)} · Покрытие{" "}
@@ -329,6 +328,35 @@ function Metric({
       <p className="mt-2 text-[14px] text-ink-soft">{label}</p>
     </div>
   );
+}
+
+interface SceneRole {
+  title: string;
+  chip: string;
+}
+
+/** Роль снимка определяется его местом в ряду, а не стороной экрана.
+ *  Иначе после обмена панелей местами более ранний снимок оказывался бы
+ *  подписан «Последнее наблюдение», а поле без аномалий получало бы
+ *  красную метку на ровном месте. */
+function roleOf(
+  scene: Observation,
+  scenes: Observation[],
+  worst: Anomaly | null,
+): SceneRole | null {
+  if (scenes.length > 0 && scene.date === scenes[scenes.length - 1].date) {
+    return { title: "Последнее наблюдение", chip: "bg-[#F1F2F4] text-ink-soft" };
+  }
+  if (worst) {
+    const before = [...scenes].reverse().find((item) => item.date < worst.start_date);
+    if (before && before.date === scene.date) {
+      return { title: "До аномалии", chip: "bg-ok-soft text-ok-ink" };
+    }
+    if (scene.date >= worst.start_date && scene.date <= worst.end_date) {
+      return { title: "Внутри аномалии", chip: "bg-danger-soft text-danger-ink" };
+    }
+  }
+  return null;
 }
 
 function sceneBadge(

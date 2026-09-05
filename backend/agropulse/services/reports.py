@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import uuid
 from dataclasses import dataclass
@@ -32,8 +33,17 @@ BOM = "﻿"
 
 
 def _sections_key(sections: set[str]) -> str:
-    """Устойчивое имя набора разделов для ключа в объектном хранилище."""
-    return "-".join(sorted(sections)) or "default"
+    """Короткий устойчивый ключ набора разделов.
+
+    Отчёт кэшируется по составу разделов, а их 127 сочетаний. Полное
+    перечисление в имени объекта дало бы длинные ключи и столько же файлов
+    на поле; хэш оставляет то же свойство «разный состав — разный объект»
+    при постоянной длине имени.
+    """
+    if not sections:
+        return "default"
+    digest = hashlib.sha1("|".join(sorted(sections)).encode("utf-8")).hexdigest()
+    return digest[:10]
 
 
 @dataclass(slots=True)

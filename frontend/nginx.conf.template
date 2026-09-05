@@ -1,8 +1,9 @@
 # Раздача SPA и проксирование API на бэкенд.
 #
-# Адрес бэкенда берётся из переменной окружения через resolver, а не зашит
-# в конфиг: тот же образ работает и в compose, и в Kubernetes, где имя
-# сервиса другое.
+# Шаблон: официальный образ nginx подставляет переменные окружения в файлы
+# из /etc/nginx/templates при старте контейнера. Благодаря этому адрес
+# бэкенда не зашит в образ — в compose это `api:8000`, в Kubernetes имя
+# сервиса задаётся переменной API_UPSTREAM без пересборки.
 
 server {
     listen 80;
@@ -29,7 +30,7 @@ server {
     }
 
     location /api/ {
-        proxy_pass http://api:8000;
+        proxy_pass ${API_UPSTREAM};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

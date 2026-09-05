@@ -1,5 +1,5 @@
 import type { LatLngBoundsExpression, Map as LeafletMap } from "leaflet";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { MapContainer, TileLayer, useMap } from "react-leaflet";
 
 import { BASEMAPS, type BasemapKind } from "@/components/map/basemaps";
@@ -69,16 +69,21 @@ interface FitBoundsProps {
   bounds: LatLngBoundsExpression | null;
   padding?: number;
   maxZoom?: number;
-  /** Подгонять только один раз: иначе карта «прыгала» бы после каждого зума. */
+  /** Подогнать только при первом появлении границ.
+   *  Без этого карта уезжала бы при добавлении каждого нового поля,
+   *  отменяя ручной зум пользователя. */
   once?: boolean;
 }
 
 export function FitBounds({ bounds, padding = 40, maxZoom = 16, once = false }: FitBoundsProps) {
   const map = useMap();
   const key = bounds ? JSON.stringify(bounds) : null;
+  const done = useRef(false);
 
   useEffect(() => {
     if (!bounds) return;
+    if (once && done.current) return;
+    done.current = true;
     map.fitBounds(bounds, { padding: [padding, padding], maxZoom, animate: !once });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, map]);

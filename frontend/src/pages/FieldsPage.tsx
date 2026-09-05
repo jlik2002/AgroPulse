@@ -1,5 +1,5 @@
-import type { Map as LeafletMap } from "leaflet";
-import { Info, PenTool, RefreshCw } from "lucide-react";
+import type { LatLngBoundsExpression, Map as LeafletMap } from "leaflet";
+import { Info, PenTool, RefreshCw, TriangleAlert } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -24,9 +24,11 @@ import { MapToolbar, type MapTool } from "@/components/map/MapToolbar";
 import { ScaleBar, ZoomControls } from "@/components/map/MapControls";
 import { RegionSearch } from "@/components/map/RegionSearch";
 import { Button } from "@/components/ui/Button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { DateRange } from "@/components/ui/DateRange";
 import { Segmented } from "@/components/ui/Segmented";
 import { EmptyState, Notice } from "@/components/ui/State";
+import { cn } from "@/lib/cn";
 import { combinedBounds } from "@/lib/geo";
 import { fieldsWord } from "@/lib/format";
 
@@ -43,7 +45,8 @@ export function FieldsPage() {
   const [editing, setEditing] = useState<string | null>(null);
   const [preflight, setPreflight] = useState(false);
   const [flyTo, setFlyTo] = useState<[number, number] | null>(null);
-  const [addedRefs, setAddedRefs] = useState<Set<string>>(new Set());
+  const [regionBounds, setRegionBounds] = useState<LatLngBoundsExpression | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [map, setMap] = useState<LeafletMap | null>(null);
 
   const createField = useCreateField(project.id);
@@ -53,20 +56,36 @@ export function FieldsPage() {
   const searchParcels = useSearchParcels();
   const startProcessing = useStartProjectProcessing(project.id);
 
+  // Результаты уже посчитаны — значит смена периода их обесценивает,
+  // и пользователя об этом надо предупредить до, а не после.
+  const hasResults = useMemo(
+    () => fields.some((field) => field.status !== "pending"),
+    [fields],
+  );
+
   const fieldBounds = useMemo(
     () => combinedBounds(fields.map((field) => field.geometry)),
     [fields],
   );
 
-  // Уже добавленные контуры не предлагаем повторно: ссылка на объект OSM
-  // в ответе поля не возвращается, поэтому помним их на клиенте.
+  // Уже добавленные контуры не предлагаем повторно. Ссылки берём из полей
+  // проекта, а не из памяти вкладки: иначе после перезагрузки страницы
+  // тот же контур предлагался бы снова и создавал поле-дубль.
+  const addedRefs = useMemo(
+    () => new Set(fields.map((field) => field.external_ref).filter(Boolean) as string[]),
+    [fields],
+  );
   const availableParcels = useMemo(
     () => parcels.filter((parcel) => !addedRefs.has(parcel.external_ref)),
     [parcels, addedRefs],
   );
 
+  // Ниже этого зума прямоугольник карты — это тысячи километров, и запрос
+  // к Overpass гарантированно упрётся в таймаут.
+  const zoomEnough = (map?.getZoom() ?? 0) >= MIN_PARCEL_ZOOM;
+
   const loadParcels = useCallback(() => {
-    if (!map) return;
+    if (!map || map.getZoom() < MIN_PARCEL_ZOOM) return;
     const bounds = map.getBounds();
     searchParcels.mutate(
       {
@@ -98,16 +117,21 @@ export function FieldsPage() {
         onSuccess: (field) => {
           setActiveFieldId(field.id);
           setTool("select");
-          if (options?.external_ref) {
-            setAddedRefs((previous) => new Set(previous).add(options.external_ref as string));
-          }
         },
       },
     );
   };
 
   const onRegionSelect = (region: Region) => {
-    setFlyTo([region.lat, region.lon]);
+    // bbox приходит вместе с регионом именно для того, чтобы вписать его
+    // в экран целиком. Перелёт в центр на фиксированный зум приземлял бы
+    // пользователя на случайное поле посреди области.
+    const [west, south, east, north] = region.bbox;
+    setRegionBounds([
+      [south, west],
+      [north, east],
+    ]);
+    setFlyTo(null);
     setParcels([]);
   };
 
@@ -128,7 +152,7 @@ export function FieldsPage() {
               }
             />
           </div>
-          <FitBounds bounds={fieldBounds} once />
+          <FitBounds bounds={regionBounds ?? fieldBounds} once={regionBounds === null} />
           <FlyTo center={flyTo} zoom={13} />
           <DrawLayer active={tool === "draw"} onCreate={(geometry) => addGeometry(geometry)} />
 
@@ -171,7 +195,10 @@ export function FieldsPage() {
         <RegionSearch
           className="absolute left-6 top-6 z-[500] w-[400px]"
           onSelect={onRegionSelect}
-          onCoordinates={(lat, lon) => setFlyTo([lat, lon])}
+          onCoordinates={(lat, lon) => {
+            setRegionBounds(null);
+            setFlyTo([lat, lon]);
+          }}
         />
 
         <Segmented
@@ -191,18 +218,27 @@ export function FieldsPage() {
         {tool === "parcels" ? (
           <div className="absolute bottom-6 left-1/2 z-[500] -translate-x-1/2">
             <div className="flex items-center gap-3 rounded-xl border border-line bg-white px-4 py-2.5 shadow-pop">
-              <span className="text-[13.5px] text-ink-soft">
+              <span
+                className={cn(
+                  "text-[13.5px]",
+                  searchParcels.isError ? "text-danger-ink" : "text-ink-soft",
+                )}
+              >
                 {searchParcels.isPending
                   ? "Ищем контуры пашни в текущем виде карты…"
-                  : availableParcels.length > 0
-                    ? `Найдено ${availableParcels.length} ${fieldsWord(availableParcels.length)} — нажмите на контур, чтобы добавить`
-                    : "В этом районе готовых контуров нет — нарисуйте поле вручную"}
+                  : searchParcels.isError
+                    ? "Источник контуров сейчас недоступен — попробуйте ещё раз или нарисуйте поле вручную"
+                    : !zoomEnough
+                      ? "Приблизьте карту, чтобы искать готовые контуры"
+                      : availableParcels.length > 0
+                        ? `Найдено ${availableParcels.length} ${fieldsWord(availableParcels.length)} — нажмите на контур, чтобы добавить`
+                        : "В этом районе готовых контуров нет — нарисуйте поле вручную"}
               </span>
               <Button
                 size="sm"
                 variant="outline"
                 onClick={loadParcels}
-                disabled={searchParcels.isPending}
+                disabled={searchParcels.isPending || !zoomEnough}
               >
                 <RefreshCw size={15} />
                 Обновить
@@ -247,7 +283,7 @@ export function FieldsPage() {
                 active={activeFieldId === field.id}
                 onSelect={() => setActiveFieldId(field.id)}
                 onEdit={() => setEditing(field.id)}
-                onDelete={() => deleteField.mutate(field.id)}
+                onDelete={() => setPendingDelete(field.id)}
               />
             ))
           )}
@@ -273,6 +309,17 @@ export function FieldsPage() {
                 updateProject.mutate({ period_from: range.from, period_to: range.to })
               }
             />
+            {updateProject.isError ? (
+              <p className="mt-2 text-[13px] text-danger-ink">
+                Период не изменён: {(updateProject.error as Error).message}
+              </p>
+            ) : null}
+            {hasResults ? (
+              <Notice tone="warn" icon={<TriangleAlert size={16} />} className="mt-2.5">
+                Поля уже проанализированы за прежний период. После его изменения запустите
+                анализ заново — иначе аномалии и прогноз будут относиться к старому окну.
+              </Notice>
+            ) : null}
           </div>
 
           <Notice icon={<Info size={17} />} className="border-none bg-transparent px-0 py-0">
@@ -307,6 +354,26 @@ export function FieldsPage() {
         }}
       />
 
+      <ConfirmDialog
+        open={Boolean(pendingDelete)}
+        onOpenChange={(open) => !open && setPendingDelete(null)}
+        title="Удалить поле?"
+        destructive
+        pending={deleteField.isPending}
+        confirmLabel="Удалить"
+        description={
+          <>
+            Вместе с полем «{fields.find((field) => field.id === pendingDelete)?.name}» будут
+            удалены все его наблюдения, найденные аномалии и прогноз. Отменить это действие
+            нельзя.
+          </>
+        }
+        onConfirm={() =>
+          pendingDelete &&
+          deleteField.mutate(pendingDelete, { onSuccess: () => setPendingDelete(null) })
+        }
+      />
+
       <PreflightDialog
         open={preflight}
         onOpenChange={setPreflight}
@@ -326,6 +393,9 @@ export function FieldsPage() {
     </div>
   );
 }
+
+/** Минимальный зум, при котором поиск контуров осмыслен. */
+const MIN_PARCEL_ZOOM = 11;
 
 /** Имя для контура из открытого источника: у OSM оно есть далеко не всегда. */
 function parcelName(parcel: Parcel, index: number): string {

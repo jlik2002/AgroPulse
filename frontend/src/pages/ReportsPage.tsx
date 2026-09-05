@@ -450,6 +450,7 @@ export function ReportsPage() {
                     deviation={analysis.deviation}
                     peakRisk={analysis.peakRisk}
                     totalPages={totalPages}
+                    sections={sections}
                   />
                 </div>
               )}
@@ -574,7 +575,8 @@ function ProjectPreviewStub({ fieldsCount, client }: { fieldsCount: number; clie
     <div className="flex h-[560px] w-[560px] flex-col rounded-lg border border-line bg-white px-10 py-9 shadow-card">
       <h2 className="text-[24px] font-semibold text-ink">Сводный отчёт по хозяйству</h2>
       <p className="mt-2 text-[13.5px] text-ink-soft">
-        {client || "Хозяйство не указано"} · {fieldsCount} полей в проекте
+        {client || "Хозяйство не указано"} · {fieldsCount}{" "}
+        {plural(fieldsCount, "поле", "поля", "полей")} в проекте
       </p>
       <ul className="mt-7 space-y-3 text-[14px] text-ink-soft">
         {PROJECT_SECTIONS.map((title) => (

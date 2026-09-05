@@ -31,11 +31,16 @@ export function ForecastChart({ history, forecast, today, height = 300 }: Foreca
       .filter((point) => point.ndvi_mean !== null)
       .map((point) => [x(point.date), point.ndvi_mean as number]);
 
-    const bandLow = seed.map((point) => [x(point.date), point.ndvi_lo ?? point.ndvi_mean ?? null]);
-    const bandSpan = seed.map((point) => [
-      x(point.date),
-      point.ndvi_hi !== null && point.ndvi_lo !== null ? point.ndvi_hi - point.ndvi_lo : 0,
-    ]);
+    // У наблюдения `ndvi_lo/hi` — коридор нормы, у прогноза — доверительный
+    // интервал. Затравочная точка ленты берётся из факта, поэтому её ширина
+    // должна быть нулевой, иначе лента стартовала бы разбросом климатологии.
+    const bandAt = (point: Observation): [number, number] =>
+      point.value_type === "forecast" && point.ndvi_lo !== null && point.ndvi_hi !== null
+        ? [point.ndvi_lo, point.ndvi_hi]
+        : [point.ndvi_mean ?? 0, point.ndvi_mean ?? 0];
+
+    const bandLow = seed.map((point) => [x(point.date), bandAt(point)[0]]);
+    const bandSpan = seed.map((point) => [x(point.date), bandAt(point)[1] - bandAt(point)[0]]);
 
     const expected = [...history, ...forecast]
       .filter((point) => point.ndvi_lo !== null && point.ndvi_hi !== null && point.value_type !== "forecast")
@@ -135,7 +140,9 @@ export function ForecastChart({ history, forecast, today, height = 300 }: Foreca
                     lineStyle: { color: CHART.colors.today, type: "dashed" as const, width: 1.4 },
                     label: {
                       show: true,
-                      formatter: `Сегодня · ${formatDayMonth(today)}`,
+                      formatter: isRecent(today)
+                        ? `Сегодня · ${formatDayMonth(today)}`
+                        : `Последнее наблюдение · ${formatDayMonth(today)}`,
                       position: "insideEndTop" as const,
                       // Без rotate подпись вертикальной линии встаёт боком.
                       rotate: 0,
@@ -162,4 +169,10 @@ export function ForecastChart({ history, forecast, today, height = 300 }: Foreca
   }, [history, forecast, today]);
 
   return <EChart option={option} height={height} />;
+}
+
+/** На архивном периоде последнее наблюдение — не «сегодня». */
+function isRecent(date: string | null | undefined): boolean {
+  if (!date) return false;
+  return (Date.now() - parseDate(date).getTime()) / 86_400_000 <= 21;
 }

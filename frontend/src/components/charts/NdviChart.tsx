@@ -5,6 +5,7 @@ import type { Anomaly, Observation } from "@/api/types";
 import { CHART, TOOLTIP_BASE } from "@/components/charts/echarts";
 import { EChart } from "@/components/charts/EChart";
 import { formatDayMonth, formatNumber, formatPercent, parseDate, toIsoDate } from "@/lib/format";
+import { expectedCurve } from "@/lib/series";
 import { VALUE_TYPE } from "@/lib/status";
 
 export interface NdviChartProps {
@@ -58,14 +59,12 @@ export function NdviChart({
     // в сплошную полосу и скрыли наблюдения под собой.
     const restoredSymbolSize = compact || restoredPoints.length > 40 ? 0 : 7;
 
-    const expected = showExpected
-      ? sorted
-          .filter((point) => point.ndvi_lo !== null && point.ndvi_hi !== null)
-          .map((point) => [
-            x(point.date),
-            ((point.ndvi_lo as number) + (point.ndvi_hi as number)) / 2,
-          ])
-      : [];
+    // У `ndvi_lo`/`ndvi_hi` два разных смысла. У исторических точек это коридор
+    // собственной нормы поля (медиана ± σ), у прогнозных — доверительный интервал
+    // предсказания. Середина второго равна самому прогнозу, поэтому без фильтра
+    // «ожидаемая динамика» на горизонте повторяла бы линию прогноза и как будто
+    // подтверждала его сама собой.
+    const expected = showExpected ? expectedCurve(sorted).map((point) => [x(point.date), point.value]) : [];
 
     const forecastPoints = sorted.filter(
       (point) => point.value_type === "forecast" && point.ndvi_mean !== null,
@@ -79,16 +78,19 @@ export function NdviChart({
     const forecast = showForecast
       ? forecastSeed.map((point) => [x(point.date), point.ndvi_mean as number])
       : [];
+    // Затравочная точка — наблюдение, и её `ndvi_lo/hi` относятся к норме,
+    // а не к прогнозу. Лента должна выходить из факта нулевой шириной,
+    // иначе она начиналась бы разбросом климатологии.
+    const bandAt = (point: Observation): [number, number] =>
+      point.value_type === "forecast" && point.ndvi_lo !== null && point.ndvi_hi !== null
+        ? [point.ndvi_lo, point.ndvi_hi]
+        : [point.ndvi_mean ?? 0, point.ndvi_mean ?? 0];
+
     const bandLow = showForecast
-      ? forecastSeed.map((point) => [x(point.date), point.ndvi_lo ?? point.ndvi_mean ?? null])
+      ? forecastSeed.map((point) => [x(point.date), bandAt(point)[0]])
       : [];
     const bandSpan = showForecast
-      ? forecastSeed.map((point) => [
-          x(point.date),
-          point.ndvi_hi !== null && point.ndvi_lo !== null
-            ? point.ndvi_hi - point.ndvi_lo
-            : 0,
-        ])
+      ? forecastSeed.map((point) => [x(point.date), bandAt(point)[1] - bandAt(point)[0]])
       : [];
 
     // label отключён явно: по умолчанию ECharts подписывает границы области
@@ -124,7 +126,8 @@ export function NdviChart({
                 ? { show: false }
                 : {
                     show: true,
-                    formatter: "Сегодня",
+                    // На архивном периоде последнее наблюдение — не «сегодня».
+                    formatter: isRecent(today) ? "Сегодня" : "Последнее наблюдение",
                     position: "insideEndTop" as const,
                     // Без rotate подпись вертикальной линии встаёт боком.
                     rotate: 0,
@@ -170,7 +173,9 @@ export function NdviChart({
       },
       yAxis: {
         type: "value",
-        min: 0,
+        // Нижняя граница не жёсткий ноль: NDVI бывает отрицательным на воде
+        // и на открытой почве после уборки, и обрезка прятала бы эти точки.
+        min: (value: { min: number }) => Math.min(0, Math.floor(value.min * 10) / 10),
         max: (value: { max: number }) => Math.min(1, Math.ceil((value.max + 0.1) * 10) / 10),
         interval: 0.2,
         axisLabel: {
@@ -271,6 +276,15 @@ export function NdviChart({
   }, [observations, anomalies, today, showExpected, showRestored, showForecast, compact]);
 
   return <EChart option={option} height={height} />;
+}
+
+/** Наблюдение считаем свежим, если оно не старше типичного интервала съёмки.
+ *  На архивном периоде подпись «Сегодня» рядом с позапрошлогодней датой
+ *  вводила бы в заблуждение. */
+function isRecent(date: string | null | undefined): boolean {
+  if (!date) return false;
+  const days = (Date.now() - parseDate(date).getTime()) / 86_400_000;
+  return days <= 21;
 }
 
 /** Подсказка макета: дата, значение, тип происхождения и покрытие. */

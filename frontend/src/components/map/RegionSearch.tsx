@@ -37,6 +37,11 @@ export function RegionSearch({ onSelect, onCoordinates, className }: RegionSearc
   const coordinates = COORDINATES.exec(text);
   const { data, isFetching } = useRegionSearch(coordinates ? "" : debounced);
 
+  // Пустой ответ — тоже результат. Без этого выпадашка просто не открывалась,
+  // и пользователь не понимал, ищет сервис или уже ответил «ничего».
+  const showEmpty =
+    !coordinates && !isFetching && debounced.trim().length >= 2 && data?.length === 0;
+
   const submitCoordinates = () => {
     if (!coordinates) return;
     const lat = Number(coordinates[1].replace(",", "."));
@@ -69,7 +74,7 @@ export function RegionSearch({ onSelect, onCoordinates, className }: RegionSearc
         {isFetching ? <Loader2 size={16} className="animate-spin text-ink-muted" /> : null}
       </div>
 
-      {open && (coordinates || (data && data.length > 0)) ? (
+      {open && (coordinates || (data && data.length > 0) || showEmpty) ? (
         <div className="absolute inset-x-0 top-[54px] overflow-hidden rounded-2xl border border-line bg-white py-1.5 shadow-pop animate-fade-in">
           {coordinates ? (
             <button
@@ -82,6 +87,11 @@ export function RegionSearch({ onSelect, onCoordinates, className }: RegionSearc
                 Перейти к координатам {coordinates[1]}, {coordinates[2]}
               </span>
             </button>
+          ) : showEmpty ? (
+            <p className="px-4 py-2.5 text-[14px] text-ink-muted">
+              Ничего не нашлось. Попробуйте другое название или введите координаты
+              через запятую.
+            </p>
           ) : (
             data?.map((region) => (
               <button

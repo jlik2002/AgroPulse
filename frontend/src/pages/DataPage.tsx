@@ -60,6 +60,7 @@ export function DataPage() {
         observations={observations}
         periodFrom={timeseries.data.period_from}
         periodTo={project.period_to}
+        history={timeseries.data.observations}
         fieldSelect={{ value: fieldId ?? "", options, onChange: setSelected }}
       />
     </div>

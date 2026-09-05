@@ -57,10 +57,16 @@ interface DataExplorerProps {
   fieldSelect?: { value: string; options: { value: string; label: string }[]; onChange: (id: string) => void };
   /** На вкладке поля заголовок раздела не нужен: он уже есть в шапке страницы. */
   showHeading?: boolean;
+  /** Полный ряд поля, включая прошлые сезоны. */
+  history?: Observation[];
 }
 
-/** Прозрачный доступ ко всем значениям, которыми пользовался сервис.
- *  Фильтры применяются на клиенте: ряд одного поля — это десятки строк. */
+/** Прозрачный доступ к значениям, которыми пользовался сервис.
+ *
+ *  По умолчанию показывается период анализа и горизонт прогноза. Переключатель
+ *  «Вся история» открывает и прошлые сезоны — те самые, по которым построена
+ *  норма поля: без них проверить её по интерфейсу было бы нельзя.
+ *  Фильтры применяются на клиенте: ряд одного поля — это сотни строк. */
 export function DataExplorer({
   fieldId,
   fieldName,
@@ -69,39 +75,43 @@ export function DataExplorer({
   periodTo,
   fieldSelect,
   showHeading = true,
+  history,
 }: DataExplorerProps) {
   const [type, setType] = useState<TypeFilter>("all");
   const [coverage, setCoverage] = useState<CoverageFilter>("any");
   const [search, setSearch] = useState("");
   const [columns, setColumns] = useState<ColumnKey[]>(DEFAULT_COLUMNS);
   const [pageSize, setPageSize] = useState(10);
+  const [wholeHistory, setWholeHistory] = useState(false);
+
+  const rows = wholeHistory && history ? history : observations;
 
   const counts = useMemo(
     () => ({
-      observed: observations.filter((row) => row.value_type === "observed").length,
-      restored: observations.filter((row) => row.value_type === "restored").length,
-      forecast: observations.filter((row) => row.value_type === "forecast").length,
+      observed: rows.filter((row) => row.value_type === "observed").length,
+      restored: rows.filter((row) => row.value_type === "restored").length,
+      forecast: rows.filter((row) => row.value_type === "forecast").length,
     }),
-    [observations],
+    [rows],
   );
 
   const lastObserved = useMemo(
     () =>
-      [...observations]
+      [...rows]
         .filter((row) => row.value_type === "observed")
         .sort((a, b) => a.date.localeCompare(b.date))
         .at(-1) ?? null,
-    [observations],
+    [rows],
   );
 
   const filtered = useMemo(
     () =>
-      observations
+      rows
         .filter((row) => (type === "all" ? true : row.value_type === type))
         .filter((row) => matchCoverage(row, coverage))
         .filter((row) => (search ? row.date.includes(normalizeSearch(search)) : true))
         .sort((a, b) => a.date.localeCompare(b.date)),
-    [observations, type, coverage, search],
+    [rows, type, coverage, search],
   );
 
   return (
@@ -176,10 +186,21 @@ export function DataExplorer({
           />
         ) : null}
 
-        <span className="flex h-11 items-center gap-2.5 rounded-xl border border-line bg-white px-3.5 text-[14px] text-ink">
-          <CalendarSearch size={17} className="text-ink-muted" />
-          {formatPeriod(periodFrom, periodTo)}
-        </span>
+        {history ? (
+          <Segmented
+            value={wholeHistory ? "history" : "period"}
+            options={[
+              { value: "period", label: formatPeriod(periodFrom, periodTo) },
+              { value: "history", label: "Вся история" },
+            ]}
+            onChange={(value) => setWholeHistory(value === "history")}
+          />
+        ) : (
+          <span className="flex h-11 items-center gap-2.5 rounded-xl border border-line bg-white px-3.5 text-[14px] text-ink">
+            <CalendarSearch size={17} className="text-ink-muted" />
+            {formatPeriod(periodFrom, periodTo)}
+          </span>
+        )}
 
         <Segmented
           value={type}
@@ -209,8 +230,7 @@ export function DataExplorer({
 
       <div className="flex flex-wrap items-center gap-3">
         <span className="text-[15px] text-ink">
-          Всего {observations.length}{" "}
-          {plural(observations.length, "значение", "значения", "значений")}
+          Всего {rows.length} {plural(rows.length, "значение", "значения", "значений")}
         </span>
         <CountChip type="observed" count={counts.observed} />
         <CountChip type="restored" count={counts.restored} />

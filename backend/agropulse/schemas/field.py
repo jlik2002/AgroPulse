@@ -47,6 +47,9 @@ class FieldRead(BaseModel):
     crop: str | None
     sowing_date: date | None
     source: FieldSource
+    # Ссылка на объект в открытом источнике. Нужна интерфейсу, чтобы не
+    # предлагать повторно уже добавленный контур после перезагрузки страницы.
+    external_ref: str | None
     status: FieldStatus
     risk_score: float | None
     created_at: datetime
@@ -69,6 +72,7 @@ class FieldRead(BaseModel):
             crop=field.crop,
             sowing_date=field.sowing_date,
             source=field.source,
+            external_ref=field.external_ref,
             status=field.status,
             risk_score=field.risk_score,
             created_at=field.created_at,

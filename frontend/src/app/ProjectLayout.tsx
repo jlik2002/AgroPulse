@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { Navigate, Outlet, useLocation, useParams } from "react-router-dom";
 
 import { useFields, useProject } from "@/api/queries";
@@ -17,7 +17,14 @@ export function ProjectLayout() {
   const location = useLocation();
 
   const project = useProject(projectId);
-  const fields = useFields(projectId, { refetchInterval: 15_000 });
+  const fields = useFields(projectId);
+
+  // Идентификатор мог устареть: проект удалили или чистили базу. Чистим
+  // хранилище эффектом, а не в теле рендера — побочные действия в фазе
+  // рендеринга в StrictMode выполняются дважды.
+  useEffect(() => {
+    if (project.isError) clearProjectId();
+  }, [project.isError]);
 
   const indexOf = useCallback(
     (fieldId: string) => {
@@ -28,8 +35,11 @@ export function ProjectLayout() {
     [fields.data],
   );
 
+  // Обработанным считается любое поле, вышедшее из состояния «в очереди»,
+  // в том числе с недостаточными данными: у него намеренно нет балла риска,
+  // но именно сводка объясняет, чего не хватило.
   const processed = useMemo(
-    () => (fields.data ?? []).some((field) => field.risk_score !== null || field.status === "normal"),
+    () => (fields.data ?? []).some((field) => field.status !== "pending"),
     [fields.data],
   );
 
@@ -41,8 +51,6 @@ export function ProjectLayout() {
   if (project.isPending) return <Loading text="Открываем проект" className="h-screen" />;
 
   if (project.isError) {
-    // Идентификатор мог устареть: проект удалили или чистили базу.
-    clearProjectId();
     return (
       <div className="mx-auto max-w-xl px-6 py-20">
         <ErrorState

@@ -48,13 +48,30 @@ def ndvi_chart(
     restored: list[tuple[date, float]],
     forecast: list[tuple[date, float, float | None, float | None]],
     anomalies: list[tuple[date, date]],
+    expected: list[tuple[date, float, float]] | None = None,
 ) -> str:
-    """График NDVI с разделением типов значений."""
+    """График NDVI с разделением типов значений.
+
+    `expected` — коридор собственной нормы поля (дата, нижняя граница,
+    верхняя). Без него отчёт и интерфейс показывали бы разное: на экране
+    ожидаемая динамика есть, а в PDF отклонение не с чем сравнить.
+    """
     figure, axes = plt.subplots(figsize=(FIGURE_WIDTH, FIGURE_HEIGHT))
 
     # Аномальные периоды рисуются первыми, чтобы заливка легла под линии.
     for start, end in anomalies:
         axes.axvspan(start, end, color=COLOR_ANOMALY, alpha=0.12, zorder=0)
+
+    if expected:
+        days = [item[0] for item in expected]
+        lows = [item[1] for item in expected]
+        highs = [item[2] for item in expected]
+        middles = [(low + high) / 2 for low, high in zip(lows, highs, strict=True)]
+        axes.fill_between(days, lows, highs, color=COLOR_NORM, alpha=0.18, zorder=1)
+        axes.plot(
+            days, middles, color=COLOR_NORM, linewidth=1.2, linestyle="--",
+            label="ожидаемая динамика", zorder=2,
+        )
 
     # Восстановленные значения показываются полыми маркерами, а не только
     # пунктирной линией: линия прячется под соседними точками, и различить

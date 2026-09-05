@@ -46,9 +46,17 @@ export function OverviewTab({ analysis, projectId, onOpenTab }: OverviewTabProps
   if (!field) return null;
 
   const style = statusOf(risk?.status ?? field.status);
-  const quality = dataQualityTitle(
-    (timeseries?.stats?.mean_valid_fraction as number | null) ?? null,
-  );
+  // Доля пригодных пикселей считается по периоду анализа, а не по всей
+  // истории поля: в сводке подпись «Качество данных» означает ровно это,
+  // и две разные цифры под одним названием сбивали бы с толку.
+  const validFractions = analysis.series.observed
+    .map((point) => point.valid_fraction)
+    .filter((value): value is number => value !== null);
+  const meanValid = validFractions.length
+    ? validFractions.reduce((sum, value) => sum + value, 0) / validFractions.length
+    : null;
+  const quality = dataQualityTitle(meanValid);
+  const qualityGood = (meanValid ?? 0) >= 0.8;
 
   return (
     <div className="space-y-4">
@@ -126,7 +134,11 @@ export function OverviewTab({ analysis, projectId, onOpenTab }: OverviewTabProps
 
         <div className="ml-auto flex shrink-0 items-center gap-5">
           <span className="flex items-center gap-2 text-[14px] text-ink-soft">
-            <CircleCheck size={18} className="text-ok" />
+            {qualityGood ? (
+              <CircleCheck size={18} className="text-ok" />
+            ) : (
+              <CircleAlert size={18} className="text-warn" />
+            )}
             Качество анализа: {quality}
           </span>
           <Button onClick={() => setChecklist(true)}>Что проверить при выезде</Button>
@@ -208,10 +220,12 @@ export function OverviewTab({ analysis, projectId, onOpenTab }: OverviewTabProps
           icon={<CircleAlert size={22} />}
           tone="warn"
           title="Прогноз на 14 дней"
+          // Формулировки описывают ожидаемую динамику и не переходят
+          // к причинам и назначениям: тех же правил держатся промпты LLM.
           subtitle={
             forecast?.insufficient_reason ??
             (forecast?.direction === "declining"
-              ? "Риск сохранится высоким без корректирующих мер"
+              ? "Ожидается дальнейшее снижение NDVI"
               : forecast?.direction === "improving"
                 ? "Ожидается восстановление вегетации"
                 : "Существенных изменений не ожидается")

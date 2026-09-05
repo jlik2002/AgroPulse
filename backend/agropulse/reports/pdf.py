@@ -162,6 +162,15 @@ def build_field_report(
         for o in observations
         if o.value_type == ValueType.FORECAST and o.ndvi_mean is not None
     ]
+    # Коридор нормы берём только у исторических точек: у прогнозных те же
+    # колонки означают доверительный интервал предсказания, а не норму.
+    expected = [
+        (o.date, o.ndvi_lo, o.ndvi_hi)
+        for o in in_period
+        if o.value_type != ValueType.FORECAST
+        and o.ndvi_lo is not None
+        and o.ndvi_hi is not None
+    ]
 
     breakdown = field.risk_breakdown or {}
     climatology = breakdown.get("climatology") or {}
@@ -249,6 +258,7 @@ def build_field_report(
         ndvi_chart=charts.ndvi_chart(
             observed, restored, forecast_points,
             [(a.start_date, a.end_date) for a in anomalies],
+            expected,
         ),
         weather_chart=weather_svg,
         anomalies=anomaly_blocks,
