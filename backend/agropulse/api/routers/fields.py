@@ -13,6 +13,7 @@ from agropulse.schemas.field import (
     FieldCreate,
     FieldRead,
     FieldUpdate,
+    ProcessingRequest,
     TimeseriesRead,
 )
 from agropulse.services.fields import CreateFieldCommand, UpdateFieldCommand
@@ -96,9 +97,19 @@ def start_processing(field_id: uuid.UUID, service: FieldServiceDep) -> dict:
 
 
 @router.post("/projects/{project_id}/process", status_code=status.HTTP_202_ACCEPTED)
-def start_project_processing(project_id: uuid.UUID, service: FieldServiceDep) -> dict:
-    """Поставить обработку всех полей проекта."""
-    accepted = service.request_project_processing(project_id)
+def start_project_processing(
+    project_id: uuid.UUID,
+    service: FieldServiceDep,
+    payload: ProcessingRequest | None = None,
+) -> dict:
+    """Поставить обработку полей проекта — всех или выбранных.
+
+    Тело запроса необязательно: без него обрабатывается весь проект, как
+    при первом запуске. Со списком — только перечисленные поля.
+    """
+    accepted = service.request_project_processing(
+        project_id, payload.field_ids if payload else None
+    )
     return {
         "project_id": str(project_id),
         "tasks": [

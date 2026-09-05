@@ -25,6 +25,7 @@ import type {
 } from "@/api/types";
 
 export const keys = {
+  projects: ["projects"] as const,
   project: (id: string) => ["project", id] as const,
   fields: (projectId: string) => ["fields", projectId] as const,
   field: (id: string) => ["field", id] as const,
@@ -53,6 +54,19 @@ export interface CreateProjectPayload {
   name?: string | null;
   period_from: string;
   period_to: string;
+}
+
+/** Проекты этого посетителя. Отбор делает бэкенд по cookie, поэтому
+ *  клиенту не нужно ничего помнить самому. */
+export function useMyProjects(enabled = true) {
+  return useQuery({
+    queryKey: keys.projects,
+    queryFn: () => request<Project[]>("/projects"),
+    enabled,
+    // Список читается один раз на входе; держать его свежим незачем.
+    staleTime: Infinity,
+    retry: 1,
+  });
 }
 
 export function useCreateProject() {
@@ -127,9 +141,22 @@ export function useUpdateField(projectId: string) {
   return useMutation({
     mutationFn: ({ fieldId, payload }: { fieldId: string; payload: UpdateFieldPayload }) =>
       request<Field>(`/fields/${fieldId}`, { method: "PATCH", body: payload }),
+    // Правка контура, культуры или даты посева обесценивает расчёт, и бэкенд
+    // ставит поле на пересчёт. Сбрасываем всё, что из этого расчёта выведено,
+    // иначе на экране остались бы прежние аномалии, риск и прогноз — а именно
+    // так и выглядело «указал культуру, а отчёт прежний».
     onSuccess: (field) => {
-      client.invalidateQueries({ queryKey: keys.fields(projectId) });
-      client.invalidateQueries({ queryKey: keys.field(field.id) });
+      for (const key of [
+        keys.fields(projectId),
+        keys.field(field.id),
+        keys.timeseries(field.id),
+        keys.anomalies(field.id),
+        keys.risk(field.id),
+        keys.forecast(field.id),
+        keys.summary(projectId),
+      ]) {
+        client.invalidateQueries({ queryKey: key });
+      }
     },
   });
 }
@@ -147,10 +174,12 @@ export function useDeleteField(projectId: string) {
 export function useStartProjectProcessing(projectId: string) {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: () =>
+    // Без списка бэкенд считает весь проект. Со списком — только выбранные
+    // поля: сбор по полю занимает минуты и расходует квоту Earth Engine.
+    mutationFn: (fieldIds?: string[]) =>
       request<{ project_id: string; tasks: { field_id: string; task_id: string }[] }>(
         `/projects/${projectId}/process`,
-        { method: "POST" },
+        { method: "POST", body: fieldIds ? { field_ids: fieldIds } : undefined },
       ),
     onSuccess: () => {
       client.invalidateQueries({ queryKey: keys.fields(projectId) });

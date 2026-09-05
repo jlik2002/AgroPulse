@@ -1,30 +1,40 @@
 import { useEffect, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { useCreateProject } from "@/api/queries";
+import { useCreateProject, useMyProjects } from "@/api/queries";
 import { Loading, ErrorState } from "@/components/ui/State";
 import { Button } from "@/components/ui/Button";
-import { loadProjectId, saveProjectId } from "@/lib/project";
 import { toIsoDate } from "@/lib/format";
 
-/** Точка входа. Регистрации в сервисе нет: проект создаётся сам,
- *  а его идентификатор остаётся у браузера — по нему пользователь
- *  возвращается к своим результатам. */
+/** Точка входа.
+ *
+ *  Регистрации в сервисе нет: при первом заходе бэкенд ставит посетителю
+ *  cookie с анонимным идентификатором и приписывает к нему созданные проекты.
+ *  Поэтому «вернуться к своим результатам» — это запрос к серверу, а не
+ *  запись в localStorage: она терялась при чистке браузера, не существовала
+ *  в приватном окне и не переезжала на второе устройство, из-за чего сводка
+ *  и отчёты после закрытия вкладки оказывались недоступны. */
 export function StartPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
+  // «Новый анализ» приходит с ?new=1: прежние проекты остаются, но открывать
+  // нужно чистое рабочее пространство, а не последнее.
+  const wantsNew = Boolean(params.get("new"));
+
+  const projects = useMyProjects(!wantsNew);
   const createProject = useCreateProject();
   const started = useRef(false);
 
   useEffect(() => {
     if (started.current) return;
+    // Ждём ответа о существующих проектах: без него мы бы создали лишний
+    // и увели пользователя от его данных.
+    if (!wantsNew && projects.isPending) return;
     started.current = true;
 
-    // «Новый анализ» приходит с ?new=1 — прежний проект не трогаем,
-    // его результаты остаются доступными по прямой ссылке.
-    const existing = params.get("new") ? null : loadProjectId();
-    if (existing) {
-      navigate(`/p/${existing}/fields`, { replace: true });
+    const latest = wantsNew ? undefined : projects.data?.[0];
+    if (latest) {
+      navigate(`/p/${latest.id}/fields`, { replace: true });
       return;
     }
 
@@ -35,13 +45,10 @@ export function StartPage() {
     createProject.mutate(
       { period_from: toIsoDate(from), period_to: toIsoDate(to) },
       {
-        onSuccess: (project) => {
-          saveProjectId(project.id);
-          navigate(`/p/${project.id}/fields`, { replace: true });
-        },
+        onSuccess: (project) => navigate(`/p/${project.id}/fields`, { replace: true }),
       },
     );
-  }, [createProject, navigate, params]);
+  }, [createProject, navigate, projects.isPending, projects.data, wantsNew]);
 
   if (createProject.isError) {
     return (
@@ -49,9 +56,7 @@ export function StartPage() {
         <ErrorState
           title="Не удалось создать проект"
           error={createProject.error}
-          action={
-            <Button onClick={() => window.location.reload()}>Повторить</Button>
-          }
+          action={<Button onClick={() => window.location.reload()}>Повторить</Button>}
         />
       </div>
     );

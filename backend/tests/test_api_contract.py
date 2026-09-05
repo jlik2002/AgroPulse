@@ -122,6 +122,37 @@ def test_update_missing_project_returns_404(client) -> None:
     assert response.json()["error"]["code"] == "project_not_found"
 
 
+def test_projects_are_listed_for_the_visitor_who_created_them(client, created_project) -> None:
+    """Возврат к своей работе после закрытия браузера — по cookie, не по localStorage."""
+    response = client.get("/api/projects")
+
+    assert response.status_code == 200
+    assert [project["id"] for project in response.json()] == [created_project["id"]]
+
+
+def test_projects_of_another_visitor_are_not_listed(client, created_project) -> None:
+    """Чужое рабочее пространство в списке не появляется."""
+    client.cookies.clear()
+
+    response = client.get("/api/projects")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_project_opens_by_link_without_the_owner_cookie(client, created_project) -> None:
+    """Идентификатор проекта и есть ключ доступа: ссылкой на результаты делятся.
+
+    Проверка владельца здесь была бы регрессией, а не защитой: отправленная
+    агроному ссылка перестала бы открываться в его браузере.
+    """
+    client.cookies.clear()
+
+    response = client.get(f"/api/projects/{created_project['id']}")
+
+    assert response.status_code == 200
+
+
 def test_delete_project_removes_its_fields(client, created_field, db_session) -> None:
     from agropulse.db.models import Field
 
@@ -299,6 +330,62 @@ def test_timeseries_of_missing_field_returns_404(client) -> None:
 # ----------------------------------------------------------------------
 # Запуск обработки
 # ----------------------------------------------------------------------
+
+
+def test_setting_crop_requests_reanalysis(client, analyzed_field, published_tasks) -> None:
+    """Культура меняет трактовку ряда, значит расчёт устарел и должен обновиться.
+
+    Пересчитывается только анализ: сами наблюдения от культуры не зависят,
+    и гонять из-за неё сбор из Earth Engine незачем.
+    """
+    published_tasks.clear()
+
+    # В фикстуре у поля уже стоит «пшеница», поэтому меняем на другую культуру.
+    response = client.patch(f"/api/fields/{analyzed_field['id']}", json={"crop": "кукуруза"})
+
+    assert response.status_code == 200
+    assert [name for name, _ in published_tasks] == ["agropulse.tasks.pipeline.analyze_field"]
+
+
+def test_repeating_the_same_crop_does_not_request_reanalysis(
+    client, analyzed_field, published_tasks
+) -> None:
+    """Форма присылает все поля при каждом сохранении — повтор пересчёта не повод."""
+    client.patch(f"/api/fields/{analyzed_field['id']}", json={"crop": "кукуруза"})
+    published_tasks.clear()
+
+    client.patch(f"/api/fields/{analyzed_field['id']}", json={"crop": "кукуруза"})
+
+    assert published_tasks == []
+
+
+def test_renaming_field_does_not_request_reanalysis(
+    client, analyzed_field, published_tasks
+) -> None:
+    """Название на расчёт не влияет."""
+    published_tasks.clear()
+
+    client.patch(f"/api/fields/{analyzed_field['id']}", json={"name": "Северное"})
+
+    assert published_tasks == []
+
+
+def test_changing_geometry_requests_full_reprocessing(
+    client, analyzed_field, published_tasks
+) -> None:
+    """Новый контур — другие наблюдения: нужен полный цикл, а не только анализ."""
+    published_tasks.clear()
+    moved = {
+        "type": "Polygon",
+        "coordinates": [
+            [[37.70, 55.80], [37.72, 55.80], [37.72, 55.81], [37.70, 55.81], [37.70, 55.80]]
+        ],
+    }
+
+    response = client.patch(f"/api/fields/{analyzed_field['id']}", json={"geometry": moved})
+
+    assert response.status_code == 200
+    assert [name for name, _ in published_tasks] == ["agropulse.tasks.pipeline.process_field"]
 
 
 def test_start_processing_publishes_task(client, created_field, published_tasks) -> None:

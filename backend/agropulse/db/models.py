@@ -133,6 +133,12 @@ class Project(Base):
     __tablename__ = "projects"
 
     id: Mapped[uuid.UUID] = _uuid_pk()
+    # Анонимный владелец из cookie посетителя. Нужен, чтобы вернуть человека
+    # к его проектам после закрытия браузера, и только для этого: проверкой
+    # прав не является, ссылка на проект по-прежнему открывает его любому.
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, index=True
+    )
     name: Mapped[str | None] = mapped_column(String(200))
     period_from: Mapped[date] = mapped_column(Date, nullable=False)
     period_to: Mapped[date] = mapped_column(Date, nullable=False)

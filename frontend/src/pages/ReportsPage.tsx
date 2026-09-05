@@ -7,7 +7,6 @@ import {
   Download,
   FileText,
   Info,
-  Minus,
   Plus,
   Shield,
 } from "lucide-react";
@@ -16,7 +15,6 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { fetchBlob } from "@/api/client";
 import { useProjectContext } from "@/app/ProjectContext";
-import { ReportPreview } from "@/components/report/ReportPreview";
 import { Button } from "@/components/ui/Button";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { Checkbox } from "@/components/ui/Checkbox";
@@ -24,7 +22,7 @@ import { Chip } from "@/components/ui/Chip";
 import { Segmented } from "@/components/ui/Segmented";
 import { Select } from "@/components/ui/Select";
 import { EmptyState, ErrorState, Notice, Spinner } from "@/components/ui/State";
-import { useFieldAnalysis } from "@/hooks/useFieldAnalysis";
+import { useTimeseries } from "@/api/queries";
 import { cn } from "@/lib/cn";
 import {
   formatArea,
@@ -89,14 +87,18 @@ export function ReportsPage() {
   const [sections, setSections] = useState<string[]>(
     FIELD_SECTIONS.filter((section) => section.key !== "table").map((section) => section.key),
   );
-  const [zoom, setZoom] = useState(75);
   const [activePage, setActivePage] = useState(1);
   const [ready, setReady] = useState<ReadyReport | null>(null);
   const [building, setBuilding] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
   const fieldId = chosenField ?? params.get("field") ?? fields[0]?.id ?? "";
-  const analysis = useFieldAnalysis(kind === "field" ? fieldId : undefined);
+  // Ряд нужен ровно для одного — прикинуть, во сколько страниц выльется
+  // полная таблица значений. Остальные результаты поля здесь не читаются:
+  // документ собирает бэкенд, и повторять его на клиенте нечем.
+  const timeseries = useTimeseries(
+    kind === "field" && sections.includes("table") ? fieldId : undefined,
+  );
 
   // Объектный URL живёт до смены документа: без освобождения браузер
   // держал бы в памяти каждый сформированный отчёт.
@@ -120,12 +122,12 @@ export function ReportsPage() {
 
     const chosen = sections.filter((key) => key !== "table").length;
     const tablePages = sections.includes("table")
-      ? Math.ceil(analysis.series.all.length / TABLE_ROWS_PER_PAGE)
+      ? Math.ceil((timeseries.data?.observations.length ?? 0) / TABLE_ROWS_PER_PAGE)
       : 0;
 
     // Обложка плюс разделы плюс таблица значений, если она включена.
     return Math.max(1, Math.ceil(chosen / SECTIONS_PER_PAGE) + 1 + tablePages);
-  }, [kind, sections, fields.length, analysis.series.all.length]);
+  }, [kind, sections, fields.length, timeseries.data?.observations.length]);
 
   const totalPages = ready?.pages ?? estimatedPages;
 
@@ -391,15 +393,8 @@ export function ReportsPage() {
         {/* --- предпросмотр --- */}
         <Card className="flex flex-col">
           <CardHeader
-            title={ready ? "Предпросмотр отчёта" : "Предпросмотр"}
-            subtitle={
-              ready ? undefined : (
-                <span className="flex items-center gap-2">
-                  <span className="h-1.5 w-1.5 rounded-full bg-ok" />
-                  Обновляется автоматически
-                </span>
-              )
-            }
+            title="Предпросмотр отчёта"
+            subtitle={ready ? undefined : "Появится после сборки документа"}
             action={
               ready ? (
                 <span className="flex items-center gap-3">
@@ -415,43 +410,32 @@ export function ReportsPage() {
           />
 
           <div className="flex min-h-0 flex-1 gap-4 p-5 pt-4">
-            <div className="flex min-h-0 flex-1 items-start justify-center overflow-auto rounded-xl bg-[#F5F6F7] p-6 scroll-thin">
+            <div className="flex min-h-0 flex-1 items-stretch justify-center overflow-hidden rounded-xl bg-[#F5F6F7] p-6">
               {ready ? (
+                // view=Fit вписывает страницу целиком, а не по ширине: у A4
+                // при подгонке по ширине нижняя половина уходит за край.
+                // Соотношение сторон задаёт ширину от высоты панели, поэтому
+                // страница всегда видна полностью.
                 <iframe
                   title="Предпросмотр отчёта"
-                  src={`${ready.url}#page=${activePage}&view=FitH&toolbar=0`}
-                  className="h-[560px] w-full rounded-lg border border-line bg-white shadow-card"
+                  src={`${ready.url}#page=${activePage}&view=Fit&toolbar=0&navpanes=0`}
+                  className="h-full w-auto min-h-[520px] rounded-lg border border-line bg-white shadow-card"
+                  style={{ aspectRatio: "210 / 297" }}
                 />
-              ) : kind === "project" ? (
-                <ProjectPreviewStub fieldsCount={fields.length} client={client} />
-              ) : analysis.isPending ? (
-                <div className="flex h-[560px] items-center gap-2.5 text-ink-muted">
-                  <Spinner />
-                  Готовим предпросмотр
-                </div>
               ) : (
-                <div
-                  className="origin-top overflow-hidden rounded-lg border border-line bg-white shadow-card"
-                  style={{
-                    width: 640,
-                    height: 820,
-                    transform: `scale(${zoom / 100})`,
-                  }}
-                >
-                  <ReportPreview
-                    field={analysis.field.data ?? null}
-                    client={client}
-                    periodFrom={project.period_from}
-                    periodTo={project.period_to}
-                    risk={analysis.risk.data}
-                    anomaly={analysis.worst}
-                    observations={analysis.series.historical}
-                    latest={analysis.latest}
-                    deviation={analysis.deviation}
-                    peakRisk={analysis.peakRisk}
-                    totalPages={totalPages}
-                    sections={sections}
-                  />
+                // До сборки не показываем ничего похожего на документ.
+                // Прежний «живой предпросмотр» рисовал свою вёрстку и свой
+                // текст, тогда как вывод в отчёте пишет языковая модель, —
+                // пользователь видел не то, что потом скачивал.
+                <div className="flex min-h-[520px] flex-col items-center justify-center gap-3 text-center">
+                  <span className="flex h-14 w-14 items-center justify-center rounded-full bg-white text-ink-muted shadow-card">
+                    <FileText size={26} />
+                  </span>
+                  <p className="text-[15px] font-medium text-ink">Отчёт ещё не сформирован</p>
+                  <p className="max-w-[320px] text-[13.5px] text-ink-muted">
+                    Выберите состав слева и нажмите «Сформировать PDF» — готовый документ
+                    откроется здесь.
+                  </p>
                 </div>
               )}
             </div>
@@ -488,42 +472,26 @@ export function ReportsPage() {
             </aside>
           </div>
 
-          <div className="flex items-center justify-end gap-3 border-t border-line px-5 py-3.5">
-            {!ready ? (
-              <div className="flex items-center gap-1">
-                <ZoomButton
-                  label="Уменьшить масштаб"
-                  onClick={() => setZoom((value) => Math.max(50, value - 25))}
-                >
-                  <Minus size={16} />
-                </ZoomButton>
-                <span className="w-14 text-center text-[14px] text-ink tnum">{zoom}%</span>
-                <ZoomButton
-                  label="Увеличить масштаб"
-                  onClick={() => setZoom((value) => Math.min(150, value + 25))}
-                >
-                  <Plus size={16} />
-                </ZoomButton>
-              </div>
-            ) : null}
-
-            <div className="flex gap-2">
-              <ZoomButton
+          {/* Листалка появляется вместе с документом: листать нечего,
+              пока PDF не собран. */}
+          {ready ? (
+            <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-3.5">
+              <PageButton
                 label="Предыдущая страница"
                 disabled={activePage <= 1}
                 onClick={() => setActivePage((value) => Math.max(1, value - 1))}
               >
                 <ChevronLeft size={17} />
-              </ZoomButton>
-              <ZoomButton
+              </PageButton>
+              <PageButton
                 label="Следующая страница"
                 disabled={activePage >= totalPages}
                 onClick={() => setActivePage((value) => Math.min(totalPages, value + 1))}
               >
                 <ChevronRight size={17} />
-              </ZoomButton>
+              </PageButton>
             </div>
-          </div>
+          ) : null}
         </Card>
       </div>
     </div>
@@ -543,7 +511,7 @@ function Row({ icon, children }: { icon: React.ReactNode; children: React.ReactN
   );
 }
 
-function ZoomButton({
+function PageButton({
   children,
   label,
   onClick,
@@ -564,31 +532,5 @@ function ZoomButton({
     >
       {children}
     </button>
-  );
-}
-
-/** Для сводного отчёта живой предпросмотр не строим: он собирает данные
- *  всех полей, и повторять эту вёрстку на клиенте значило бы держать
- *  вторую реализацию документа. Показываем состав будущего документа. */
-function ProjectPreviewStub({ fieldsCount, client }: { fieldsCount: number; client: string }) {
-  return (
-    <div className="flex h-[560px] w-[560px] flex-col rounded-lg border border-line bg-white px-10 py-9 shadow-card">
-      <h2 className="text-[24px] font-semibold text-ink">Сводный отчёт по хозяйству</h2>
-      <p className="mt-2 text-[13.5px] text-ink-soft">
-        {client || "Хозяйство не указано"} · {fieldsCount}{" "}
-        {plural(fieldsCount, "поле", "поля", "полей")} в проекте
-      </p>
-      <ul className="mt-7 space-y-3 text-[14px] text-ink-soft">
-        {PROJECT_SECTIONS.map((title) => (
-          <li key={title} className="flex items-center gap-3">
-            <Check size={16} className="text-brand-700" />
-            {title}
-          </li>
-        ))}
-      </ul>
-      <p className="mt-auto text-[12.5px] text-ink-muted">
-        Точная вёрстка страниц будет видна после формирования PDF.
-      </p>
-    </div>
   );
 }

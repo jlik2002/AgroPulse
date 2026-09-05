@@ -38,6 +38,17 @@ class FieldUpdate(BaseModel):
     sowing_date: date | None = None
 
 
+class ProcessingRequest(BaseModel):
+    """Какие поля обрабатывать.
+
+    Пустой список отличается от отсутствующего тела осознанно: `None` значит
+    «весь проект», пустой список — что пользователь не выбрал ни одного поля,
+    и это ошибка, а не команда обработать всё.
+    """
+
+    field_ids: list[uuid.UUID] | None = None
+
+
 class FieldRead(BaseModel):
     id: uuid.UUID
     project_id: uuid.UUID

@@ -24,6 +24,8 @@ class CreateProjectCommand:
     name: str | None
     period_from: date
     period_to: date
+    # Анонимный владелец из cookie посетителя.
+    owner_id: uuid.UUID | None = None
 
 
 @dataclass(slots=True)
@@ -42,6 +44,7 @@ class ProjectService:
     def create(self, command: CreateProjectCommand) -> Project:
         project = self._uow.projects.add(
             Project(
+                owner_id=command.owner_id or uuid.uuid4(),
                 name=command.name,
                 period_from=command.period_from,
                 period_to=command.period_to,
@@ -51,7 +54,22 @@ class ProjectService:
         logger.info("project_created", extra={"project_id": str(project.id)})
         return project
 
+    def list_for_owner(self, owner_id: uuid.UUID) -> list[Project]:
+        """Проекты посетителя, свежие первыми.
+
+        По этому списку интерфейс возвращает человека к работе после закрытия
+        браузера. Отбор идёт по владельцу и правами не является: проект
+        по-прежнему открывается по прямой ссылке кем угодно — так и задумано,
+        ссылкой на результаты делятся.
+        """
+        return self._uow.projects.list_for_owner(owner_id)
+
     def get(self, project_id: uuid.UUID) -> Project:
+        """Проект по идентификатору, без проверки владельца.
+
+        Сознательно: идентификатор проекта и есть ключ доступа к нему, и ссылка,
+        отправленная агроному, обязана открыться в его браузере.
+        """
         project = self._uow.projects.get(project_id)
         if project is None:
             raise ProjectNotFoundError(project_id=str(project_id))

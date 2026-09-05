@@ -2,11 +2,15 @@ import type { EChartsOption } from "echarts";
 import { useMemo } from "react";
 
 import type { Anomaly, Observation } from "@/api/types";
-import { CHART, TOOLTIP_BASE } from "@/components/charts/echarts";
+import { CHART, TOOLTIP_BASE, valueScale } from "@/components/charts/echarts";
 import { EChart } from "@/components/charts/EChart";
 import { formatDayMonth, formatNumber, formatPercent, parseDate, toIsoDate } from "@/lib/format";
 import { expectedCurve } from "@/lib/series";
 import { VALUE_TYPE } from "@/lib/status";
+
+// Минимальный размах оси NDVI. Просадка на 0,15 при таком размахе занимает
+// половину высоты и хорошо читается, а колебание на 0,01 остаётся плоским.
+const NDVI_MIN_SPAN = 0.3;
 
 export interface NdviChartProps {
   observations: Observation[];
@@ -93,6 +97,21 @@ export function NdviChart({
       ? forecastSeed.map((point) => [x(point.date), bandAt(point)[1] - bandAt(point)[0]])
       : [];
 
+    // Всё, что реально попадёт на полотно, включая коридор прогноза:
+    // иначе лента разброса упёрлась бы в край и выглядела обрезанной.
+    const plotted = [
+      ...observed.map(([, value]) => value as number),
+      ...expected.map(([, value]) => value as number),
+      ...forecast.map(([, value]) => value as number),
+      ...forecastSeed.flatMap((point) => (showForecast ? bandAt(point) : [])),
+      ...(showRestored
+        ? restoredPoints
+            .map((point) => point.ndvi_mean)
+            .filter((value): value is number => value !== null)
+        : []),
+    ].filter((value) => Number.isFinite(value));
+    const scale = valueScale(plotted, { minSpan: NDVI_MIN_SPAN, limit: [-1, 1] });
+
     // label отключён явно: по умолчанию ECharts подписывает границы области
     // значением оси, и на оси времени это сырой таймстемп.
     const markAreas = anomalies.map((anomaly) => [
@@ -173,14 +192,17 @@ export function NdviChart({
       },
       yAxis: {
         type: "value",
-        // Нижняя граница не жёсткий ноль: NDVI бывает отрицательным на воде
-        // и на открытой почве после уборки, и обрезка прятала бы эти точки.
-        min: (value: { min: number }) => Math.min(0, Math.floor(value.min * 10) / 10),
-        max: (value: { max: number }) => Math.min(1, Math.ceil((value.max + 0.1) * 10) / 10),
-        interval: 0.2,
+        // Диапазон считается по самим данным, а не привязан к нулю: поле,
+        // прошедшее сезон в коридоре 0,55–0,70, на шкале 0..1 выглядело
+        // прямой линией, и просадка, ради которой график и рисуется, была
+        // не видна. MIN_SPAN не даёт обратного перекоса — ряд без событий
+        // не растягивается на всю высоту и честно остаётся плоским.
+        min: scale.min,
+        max: scale.max,
+        interval: scale.interval,
         axisLabel: {
           ...CHART.axisLabel,
-          formatter: (value: number) => formatNumber(value, 1),
+          formatter: (value: number) => formatNumber(value, 2),
         },
         axisLine: { show: false },
         axisTick: { show: false },
@@ -248,7 +270,9 @@ export function NdviChart({
           type: "line",
           data: observed,
           symbol: "circle",
-          symbolSize: compact ? 0 : 6,
+          // Даже на карточке обзора точки наблюдений не убираем: без них
+          // не отличить измеренное значение от протянутой между ними линии.
+          symbolSize: compact ? 3 : 6,
           itemStyle: { color: CHART.colors.observed },
           lineStyle: { color: CHART.colors.observed, width: 2.4 },
           z: 4,

@@ -41,6 +41,14 @@ class Settings(BaseSettings):
     cors_allow_origins: list[str] = Field(default_factory=list)
     """Разрешённые origin. В `local` подставляется `*`, см. `resolved_cors_origins`."""
 
+    session_cookie_secure: bool = False
+    """Ставить ли на cookie посетителя флаг Secure.
+
+    По умолчанию выключен: локальный запуск идёт по http, и браузер просто
+    не сохранил бы такую куку — пользователь терял бы свои проекты при каждом
+    заходе. За TLS-терминатором в кластере включается через окружение.
+    """
+
     # --- база данных ---
     postgres_host: str = "postgres"
     postgres_port: int = 5432

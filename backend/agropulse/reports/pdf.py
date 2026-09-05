@@ -40,9 +40,18 @@ STATUS_TITLES = {
     "failed": "Ошибка обработки",
 }
 
+# Характер события — им озаглавлен блок аномалии.
 SEVERITY_TITLES = {
     "moderate": "Угнетение биомассы",
     "critical": "Критическая аномалия",
+}
+
+# Тяжесть события как ступень шкалы. Отдельно от названия: в строке таблицы
+# «Уровень» значение обязано быть уровнем, а «Угнетение биомассы» — это то,
+# что произошло, а не насколько сильно.
+SEVERITY_LEVELS = {
+    "moderate": "Умеренный",
+    "critical": "Критический",
 }
 
 DIRECTION_TITLES = {
@@ -214,6 +223,9 @@ def build_field_report(
                 "duration_days": anomaly.duration_days,
                 "max_zscore": _round(anomaly.max_zscore),
                 "severity_title": SEVERITY_TITLES.get(
+                    anomaly.severity.value, anomaly.severity.value
+                ),
+                "severity_level": SEVERITY_LEVELS.get(
                     anomaly.severity.value, anomaly.severity.value
                 ),
                 "restored_fraction": _round(anomaly.restored_fraction),

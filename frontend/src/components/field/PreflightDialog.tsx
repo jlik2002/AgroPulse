@@ -1,21 +1,30 @@
 import { CalendarDays, CheckCircle2, Clock, CloudSun, Leaf, Pentagon, Satellite, TriangleAlert } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { Field, Project } from "@/api/types";
 import { Button } from "@/components/ui/Button";
+import { Checkbox } from "@/components/ui/Checkbox";
+import { Chip } from "@/components/ui/Chip";
 import { FieldBadge } from "@/components/ui/FieldBadge";
 import { Modal } from "@/components/ui/Modal";
 import { formatArea, formatPeriod, fieldsWord } from "@/lib/format";
+import { statusOf } from "@/lib/status";
 
 interface PreflightDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   project: Project;
   fields: Field[];
-  onConfirm: () => void;
+  /** Идентификаторы полей, которые нужно посчитать. */
+  onConfirm: (fieldIds: string[]) => void;
   starting?: boolean;
 }
 
 /** Финальная проверка перед длительным расчётом.
+ *
+ *  Поля выбираются флажками: сбор по одному полю занимает минуты и расходует
+ *  квоту Earth Engine, поэтому, добавив одно поле к десяти уже посчитанным,
+ *  пользователь должен иметь возможность посчитать только его.
  *
  *  Отсутствие культуры показывается предупреждением, но запуск не блокирует:
  *  анализ в этом случае опирается на собственную историю поля. */
@@ -27,8 +36,36 @@ export function PreflightDialog({
   onConfirm,
   starting,
 }: PreflightDialogProps) {
-  const totalArea = fields.reduce((sum, field) => sum + (field.area_ha ?? 0), 0);
-  const withoutCrop = fields.filter((field) => !field.crop);
+  // Выбор храним только после явного действия пользователя: список полей
+  // приезжает запросом, и вычисленное один раз начальное значение осталось бы
+  // пустым навсегда. По умолчанию отмечено то, что ещё не считалось, а если
+  // посчитано всё — весь список: пересчёт целиком тоже осмысленное действие.
+  const [chosen, setChosen] = useState<Set<string> | null>(null);
+
+  const pending = useMemo(
+    () => fields.filter((field) => field.status === "pending" || field.status === "failed"),
+    [fields],
+  );
+  const selected = useMemo(
+    () => chosen ?? new Set((pending.length > 0 ? pending : fields).map((field) => field.id)),
+    [chosen, pending, fields],
+  );
+
+  // Закрыли и открыли заново — выбор считается заново от текущих статусов.
+  useEffect(() => {
+    if (!open) setChosen(null);
+  }, [open]);
+
+  const toggle = (fieldId: string, checked: boolean) => {
+    const next = new Set(selected);
+    if (checked) next.add(fieldId);
+    else next.delete(fieldId);
+    setChosen(next);
+  };
+
+  const chosenFields = fields.filter((field) => selected.has(field.id));
+  const totalArea = chosenFields.reduce((sum, field) => sum + (field.area_ha ?? 0), 0);
+  const withoutCrop = chosenFields.filter((field) => !field.crop);
 
   return (
     <Modal
@@ -41,15 +78,23 @@ export function PreflightDialog({
           <Button variant="outline" size="lg" onClick={() => onOpenChange(false)}>
             Назад
           </Button>
-          <Button size="lg" onClick={onConfirm} disabled={starting || fields.length === 0}>
-            {starting ? "Запускаем…" : "Начать анализ"}
+          <Button
+            size="lg"
+            onClick={() => onConfirm([...selected])}
+            disabled={starting || selected.size === 0}
+          >
+            {starting ? "Запускаем…" : `Начать анализ · ${selected.size}`}
           </Button>
         </div>
       }
     >
       <div className="space-y-5">
         <div className="flex items-stretch rounded-xl border border-line bg-[#FAFBFB]">
-          <Metric icon={<Pentagon size={20} />} value={String(fields.length)} unit={fieldsWord(fields.length)} />
+          <Metric
+            icon={<Pentagon size={20} />}
+            value={String(selected.size)}
+            unit={fieldsWord(selected.size)}
+          />
           <span className="my-3 w-px bg-line" />
           <Metric
             icon={<Leaf size={20} />}
@@ -59,18 +104,46 @@ export function PreflightDialog({
         </div>
 
         <section>
-          <h3 className="mb-2.5 text-[13px] font-medium text-ink-soft">Выбранные поля</h3>
+          <div className="mb-2.5 flex items-center justify-between">
+            <h3 className="text-[13px] font-medium text-ink-soft">Какие поля считать</h3>
+            <button
+              type="button"
+              onClick={() =>
+                setChosen(
+                  selected.size === fields.length
+                    ? new Set()
+                    : new Set(fields.map((field) => field.id)),
+                )
+              }
+              className="text-[13px] font-medium text-brand-700 hover:underline"
+            >
+              {selected.size === fields.length ? "Снять все" : "Выбрать все"}
+            </button>
+          </div>
           <ul className="space-y-2">
-            {fields.map((field, index) => (
-              <li key={field.id} className="flex items-center gap-2.5 text-[14px] text-ink">
-                <FieldBadge index={index + 1} size="sm" />
-                <span className="truncate font-medium">{field.name}</span>
-                <span className="text-ink-muted">·</span>
-                <span className="text-ink-soft">{formatArea(field.area_ha)}</span>
-                <span className="text-ink-muted">·</span>
-                <span className="truncate text-ink-soft">{field.crop ?? "Культура не указана"}</span>
-              </li>
-            ))}
+            {fields.map((field, index) => {
+              const style = statusOf(field.status);
+              const done = field.status !== "pending" && field.status !== "failed";
+              return (
+                <li key={field.id} className="flex items-center gap-2.5 text-[14px] text-ink">
+                  <Checkbox
+                    checked={selected.has(field.id)}
+                    onChange={(checked) => toggle(field.id, checked)}
+                    ariaLabel={`Считать поле «${field.name}»`}
+                  />
+                  <FieldBadge index={index + 1} size="sm" />
+                  <span className="min-w-0 flex-1 truncate font-medium">{field.name}</span>
+                  <span className="shrink-0 text-ink-soft">{formatArea(field.area_ha)}</span>
+                  {/* Посчитанные поля видно сразу: их обычно и снимают,
+                      чтобы не гонять сбор второй раз. */}
+                  {done ? (
+                    <Chip size="sm" className={style.chip}>
+                      {style.title}
+                    </Chip>
+                  ) : null}
+                </li>
+              );
+            })}
           </ul>
         </section>
 

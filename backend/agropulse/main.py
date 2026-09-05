@@ -15,6 +15,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from agropulse.api.errors import register_exception_handlers
+from agropulse.api.identity import AnonymousIdentityMiddleware
 from agropulse.api.middleware import RequestContextMiddleware
 from agropulse.api.routers import (
     analysis,
@@ -69,7 +70,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     # Порядок важен: контекст запроса должен существовать к моменту, когда
-    # обработчик ошибок соберёт ответ с `request_id`.
+    # обработчик ошибок соберёт ответ с `request_id`. add_middleware добавляет
+    # снаружи, поэтому объявленный последним отработает первым.
+    app.add_middleware(
+        AnonymousIdentityMiddleware, secure=settings.session_cookie_secure
+    )
     app.add_middleware(RequestContextMiddleware)
     app.add_middleware(
         CORSMiddleware,

@@ -15,7 +15,7 @@ from __future__ import annotations
 import uuid
 from typing import Protocol
 
-from agropulse.tasks.pipeline import process_field
+from agropulse.tasks.pipeline import analyze_field, process_field
 
 
 class TaskPublisher(Protocol):
@@ -25,7 +25,20 @@ class TaskPublisher(Protocol):
         """Поставить полный цикл обработки поля. Возвращает идентификатор задачи."""
         ...
 
+    def publish_field_analysis(self, field_id: uuid.UUID) -> str:
+        """Поставить только пересчёт по уже собранным наблюдениям.
+
+        Отдельно от полного цикла, потому что стоит несопоставимо дешевле:
+        сбор ходит в Earth Engine и занимает минуты, а анализ считается
+        на месте за секунды. Правка культуры меняет трактовку ряда, но не
+        сам ряд, и гонять из-за неё сбор незачем.
+        """
+        ...
+
 
 class CeleryTaskPublisher:
     def publish_field_processing(self, field_id: uuid.UUID) -> str:
         return process_field.delay(str(field_id)).id
+
+    def publish_field_analysis(self, field_id: uuid.UUID) -> str:
+        return analyze_field.delay(str(field_id)).id

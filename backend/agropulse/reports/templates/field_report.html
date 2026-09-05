@@ -76,11 +76,12 @@
 <h2>Негативные аномальные периоды</h2>
 {% if anomalies %}
   {% for anomaly in anomalies %}
-    <h3>{{ anomaly.start_date }} — {{ anomaly.end_date }} ({{ anomaly.duration_days }} дн.)</h3>
+    <h3>{{ anomaly.severity_title }}: {{ anomaly.start_date }} — {{ anomaly.end_date }}
+      ({{ anomaly.duration_days }} дн.)</h3>
     <table>
       <tr><th>Показатель</th><th>Значение</th></tr>
       <tr><td>Максимальное отклонение от нормы</td><td class="num">{{ anomaly.max_zscore }}</td></tr>
-      <tr><td>Уровень</td><td>{{ anomaly.severity_title }}</td></tr>
+      <tr><td>Уровень</td><td>{{ anomaly.severity_level }}</td></tr>
       <tr><td>Доля восстановленных значений</td><td class="num">{{ anomaly.restored_fraction }}</td></tr>
       <tr><td>Уверенность в событии</td><td class="num">{{ anomaly.confidence }}</td></tr>
     </table>

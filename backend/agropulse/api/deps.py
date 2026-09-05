@@ -10,11 +10,13 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Annotated
 
 from fastapi import Depends
 from sqlalchemy.orm import Session
 
+from agropulse.api.identity import get_owner_id
 from agropulse.config import Settings, get_settings
 from agropulse.db.session import get_db
 from agropulse.db.uow import UnitOfWork
@@ -27,6 +29,8 @@ from agropulse.tasks.publisher import CeleryTaskPublisher, TaskPublisher
 
 SessionDep = Annotated[Session, Depends(get_db)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+# Анонимный посетитель. Значение приходит из cookie, см. `api/identity.py`.
+OwnerIdDep = Annotated[uuid.UUID, Depends(get_owner_id)]
 
 
 def get_uow(session: SessionDep) -> UnitOfWork:

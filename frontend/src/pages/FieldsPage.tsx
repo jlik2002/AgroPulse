@@ -380,8 +380,8 @@ export function FieldsPage() {
         project={project}
         fields={fields}
         starting={startProcessing.isPending}
-        onConfirm={() =>
-          startProcessing.mutate(undefined, {
+        onConfirm={(fieldIds) =>
+          startProcessing.mutate(fieldIds, {
             onSuccess: () => {
               setPreflight(false);
               refetchFields();

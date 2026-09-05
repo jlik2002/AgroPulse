@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 
@@ -115,18 +116,35 @@ class FieldService:
         return field
 
     def update(self, field_id: uuid.UUID, command: UpdateFieldCommand) -> Field:
-        """Изменить поле.
+        """Изменить поле и, если правка обесценила расчёт, пересчитать его.
 
         Смена контура делает недействительными все производные данные: прежние
         наблюдения относятся к другой области, а построенные по ним аномалии,
-        прогноз и оценка риска — к другому полю. Раньше очищались только
-        наблюдения, и в интерфейсе оставались аномалии от снятого контура.
-        Теперь производные данные снимаются целиком и в одной транзакции с
-        изменением геометрии.
+        прогноз и оценка риска — к другому полю. Поэтому производные данные
+        снимаются целиком и в одной транзакции с изменением геометрии, а следом
+        поле уходит на полный цикл — иначе оно осталось бы пустым до тех пор,
+        пока пользователь не догадается запустить анализ вручную.
+
+        Культура и дата посева ряд не меняют, но меняют его трактовку: они
+        уходят в сервис моделей и в текст отчёта. Собранные наблюдения при этом
+        остаются годными, поэтому достаточно пересчёта без обращения к Earth
+        Engine. Раньше не делалось ни того, ни другого: пользователь указывал
+        культуру, а отчёт оставался прежним.
+
+        Переименование поля на расчёт не влияет и ничего не запускает.
         """
         field = self.get(field_id)
 
-        if command.geometry is not None:
+        geometry_changed = command.geometry is not None
+        # Сравниваем со значением в базе: повторная отправка той же культуры
+        # приходит при каждом сохранении формы и пересчёт запускать не должна.
+        interpretation_changed = any(
+            getattr(command, attribute) is not None
+            and getattr(command, attribute) != getattr(field, attribute)
+            for attribute in ("crop", "sowing_date")
+        )
+
+        if geometry_changed:
             geometry, area_ha = validate_polygon(command.geometry)
             field.geom = to_wkt_element(geometry)
             field.area_ha = area_ha
@@ -137,7 +155,33 @@ class FieldService:
             if value is not None:
                 setattr(field, attribute, value)
 
+        # Поле, которое ещё ни разу не считалось, пересчитывать нечего:
+        # оно уйдёт в обработку вместе со всем проектом.
+        analyzed = field.status not in (FieldStatus.PENDING, FieldStatus.FAILED)
+        if not geometry_changed and interpretation_changed and analyzed:
+            field.status = FieldStatus.PENDING
+
         self._uow.commit()
+
+        # Задачи публикуются после фиксации транзакции: воркер может забрать
+        # их мгновенно и обязан увидеть в базе уже изменённое поле.
+        if geometry_changed:
+            task_id = self._publisher.publish_field_processing(field.id)
+            logger.info(
+                "field_reprocessing_requested",
+                extra={"field_id": str(field_id), "celery_task_id": task_id, "cause": "geometry"},
+            )
+        elif interpretation_changed and analyzed:
+            task_id = self._publisher.publish_field_analysis(field.id)
+            logger.info(
+                "field_reanalysis_requested",
+                extra={
+                    "field_id": str(field_id),
+                    "celery_task_id": task_id,
+                    "cause": "interpretation",
+                },
+            )
+
         logger.info("field_updated", extra={"field_id": str(field_id)})
         return field
 
@@ -165,8 +209,16 @@ class FieldService:
         )
         return ProcessingAccepted(field_id=field.id, task_id=task_id)
 
-    def request_project_processing(self, project_id: uuid.UUID) -> list[ProcessingAccepted]:
-        """Поставить обработку всех полей проекта.
+    def request_project_processing(
+        self, project_id: uuid.UUID, field_ids: Sequence[uuid.UUID] | None = None
+    ) -> list[ProcessingAccepted]:
+        """Поставить обработку полей проекта.
+
+        `field_ids` ограничивает запуск выбранными полями. Это не украшение:
+        сбор по одному полю занимает минуты и расходует квоту Earth Engine,
+        поэтому добавив одно поле к десяти уже посчитанным, пользователь
+        должен иметь возможность посчитать только его. Без списка обрабатывается
+        весь проект — так работает первый запуск.
 
         Поля обрабатываются независимыми задачами: отказ по одному полю
         не должен останавливать остальные.
@@ -175,6 +227,18 @@ class FieldService:
         fields = self._uow.fields.list_for_project(project_id)
         if not fields:
             raise EmptyProjectError(project_id=str(project_id))
+
+        if field_ids is not None:
+            # Отбираем из полей проекта, а не доверяем списку: идентификатор
+            # чужого поля не должен запускать обработку через этот проект.
+            requested = set(field_ids)
+            known = {field.id for field in fields}
+            unknown = requested - known
+            if unknown:
+                raise FieldNotFoundError(field_id=str(next(iter(unknown))))
+            fields = [field for field in fields if field.id in requested]
+            if not fields:
+                raise EmptyProjectError(project_id=str(project_id))
 
         accepted = [
             ProcessingAccepted(
@@ -185,7 +249,11 @@ class FieldService:
         ]
         logger.info(
             "project_processing_requested",
-            extra={"project_id": str(project_id), "fields": len(accepted)},
+            extra={
+                "project_id": str(project_id),
+                "fields": len(accepted),
+                "selective": field_ids is not None,
+            },
         )
         return accepted
 

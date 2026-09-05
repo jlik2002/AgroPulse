@@ -2,7 +2,7 @@ import type { EChartsOption } from "echarts";
 import { useMemo } from "react";
 
 import type { Anomaly, Observation } from "@/api/types";
-import { CHART, TOOLTIP_BASE } from "@/components/charts/echarts";
+import { CHART, TOOLTIP_BASE, valueScale } from "@/components/charts/echarts";
 import { EChart } from "@/components/charts/EChart";
 import { formatDayMonth, formatNumber, parseDate } from "@/lib/format";
 
@@ -18,11 +18,29 @@ interface MiniSeriesChartProps {
 
 const METRICS: Record<
   Metric,
-  { color: string; kind: "line" | "bar"; digits: number; unit: string; min?: number; max?: number }
+  {
+    color: string;
+    kind: "line" | "bar";
+    digits: number;
+    unit: string;
+    /** Минимальный размах оси и физические границы величины. */
+    minSpan: number;
+    limit?: [number, number];
+  }
 > = {
-  ndmi: { color: CHART.colors.ndmi, kind: "line", digits: 2, unit: "", min: 0, max: 1 },
-  temperature: { color: CHART.colors.temp, kind: "line", digits: 0, unit: "°C" },
-  precipitation: { color: CHART.colors.precip, kind: "bar", digits: 0, unit: " мм", min: 0 },
+  // NDMI на полях держится примерно в 0…0,4, и шкала 0..1 прижимала кривую
+  // к нижней трети: сезонный ход влажности выглядел прямой линией.
+  ndmi: { color: CHART.colors.ndmi, kind: "line", digits: 2, unit: "", minSpan: 0.2, limit: [-1, 1] },
+  temperature: { color: CHART.colors.temp, kind: "line", digits: 0, unit: "°C", minSpan: 8 },
+  // Осадки — величина от нуля: столбик обязан быть виден целиком.
+  precipitation: {
+    color: CHART.colors.precip,
+    kind: "bar",
+    digits: 0,
+    unit: " мм",
+    minSpan: 5,
+    limit: [0, Number.POSITIVE_INFINITY],
+  },
 };
 
 /** Небольшие графики погодного контекста под основным: NDMI, температура,
@@ -50,6 +68,16 @@ export function MiniSeriesChart({
         return [x(point.date), value];
       })
       .filter(([, value]) => value !== null && value !== undefined);
+
+    const scale = valueScale(
+      data.map(([, value]) => value as number),
+      // Для осадков ось всегда начинается с нуля: столбик, обрезанный снизу,
+      // врёт о своей высоте.
+      {
+        minSpan: config.minSpan,
+        limit: config.kind === "bar" ? [0, Number.POSITIVE_INFINITY] : config.limit,
+      },
+    );
 
     const markAreas = anomalies.map((anomaly) => [
       {
@@ -111,9 +139,9 @@ export function MiniSeriesChart({
       },
       yAxis: {
         type: "value",
-        min: config.min,
-        max: config.max,
-        splitNumber: 2,
+        min: scale.min,
+        max: scale.max,
+        interval: scale.interval,
         axisLabel: {
           ...CHART.axisLabel,
           fontSize: 11,
@@ -129,7 +157,7 @@ export function MiniSeriesChart({
           data,
           smooth: config.kind === "line" ? 0.25 : undefined,
           showSymbol: false,
-          barMaxWidth: 5,
+          barMaxWidth: 10,
           lineStyle: { color: config.color, width: 2 },
           itemStyle: { color: config.color, borderRadius: config.kind === "bar" ? [2, 2, 0, 0] : 0 },
           markArea: markAreas.length ? { silent: true, data: markAreas as never } : undefined,

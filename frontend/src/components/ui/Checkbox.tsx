@@ -7,12 +7,22 @@ import { cn } from "@/lib/cn";
 interface CheckboxProps {
   checked: boolean;
   onChange: (checked: boolean) => void;
-  label: string;
+  /** Видимая подпись. Не задана — подпись переходит в `aria-label`,
+   *  и флажок остаётся доступным с клавиатуры и для чтения с экрана. */
+  label?: string;
+  ariaLabel?: string;
   className?: string;
   disabled?: boolean;
 }
 
-export function Checkbox({ checked, onChange, label, className, disabled }: CheckboxProps) {
+export function Checkbox({
+  checked,
+  onChange,
+  label,
+  ariaLabel,
+  className,
+  disabled,
+}: CheckboxProps) {
   const id = useId();
   return (
     <div className={cn("flex items-center gap-2.5", className)}>
@@ -20,6 +30,7 @@ export function Checkbox({ checked, onChange, label, className, disabled }: Chec
         id={id}
         checked={checked}
         disabled={disabled}
+        aria-label={label ? undefined : (ariaLabel ?? "Отметить")}
         onCheckedChange={(state) => onChange(state === true)}
         className={cn(
           "flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] border transition-colors",
@@ -31,9 +42,11 @@ export function Checkbox({ checked, onChange, label, className, disabled }: Chec
           <Check size={13} strokeWidth={3} />
         </RadixCheckbox.Indicator>
       </RadixCheckbox.Root>
-      <label htmlFor={id} className="cursor-pointer select-none text-[14px] text-ink">
-        {label}
-      </label>
+      {label ? (
+        <label htmlFor={id} className="cursor-pointer select-none text-[14px] text-ink">
+          {label}
+        </label>
+      ) : null}
     </div>
   );
 }

@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { Navigate, Outlet, useLocation, useParams } from "react-router-dom";
 
 import { useFields, useProject } from "@/api/queries";
 import { ProjectProvider } from "@/app/ProjectContext";
 import { TopNav, type NavItem } from "@/components/layout/TopNav";
 import { Loading, ErrorState } from "@/components/ui/State";
-import { clearProjectId } from "@/lib/project";
 import { formatUpdatedAt } from "@/lib/format";
 
 /** Оболочка рабочего пространства: шапка, навигация и общий контекст проекта.
@@ -18,13 +17,6 @@ export function ProjectLayout() {
 
   const project = useProject(projectId);
   const fields = useFields(projectId);
-
-  // Идентификатор мог устареть: проект удалили или чистили базу. Чистим
-  // хранилище эффектом, а не в теле рендера — побочные действия в фазе
-  // рендеринга в StrictMode выполняются дважды.
-  useEffect(() => {
-    if (project.isError) clearProjectId();
-  }, [project.isError]);
 
   const indexOf = useCallback(
     (fieldId: string) => {
