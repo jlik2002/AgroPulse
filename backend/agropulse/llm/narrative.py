@@ -15,6 +15,7 @@ import json
 import logging
 from dataclasses import dataclass
 
+from agropulse.config import get_settings
 from agropulse.llm import prompts
 from agropulse.llm.openrouter import LLMUnavailable, OpenRouterClient
 from agropulse.llm.validator import verify
@@ -44,12 +45,18 @@ def _generate(prompt_template: str, payload: dict, temperature: float = 0.2) -> 
             skipped_reason="генерация пояснений отключена или не задан ключ OpenRouter",
         )
 
+    # Длина ответа задаётся здесь, а не бюджетом токенов в запросе: бюджет
+    # у рассуждающей модели первым расходуют внутренние рассуждения, и тесный
+    # лимит оставляет не короткий текст, а пустой ответ.
+    max_words = get_settings().llm_answer_max_words
+    system_prompt = prompts.SYSTEM_PROMPT.format(max_words=max_words)
+
     serialized = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
-    user_prompt = prompt_template.format(payload=serialized)
+    user_prompt = prompt_template.format(payload=serialized, max_words=max_words)
 
     for attempt in (1, 2):
         try:
-            text = client.complete(prompts.SYSTEM_PROMPT, user_prompt, temperature)
+            text = client.complete(system_prompt, user_prompt, temperature)
         except LLMUnavailable as exc:
             logger.warning("Генерация не выполнена: %s", exc)
             return Narrative(text=None, verified=False, skipped_reason=str(exc))

@@ -24,14 +24,19 @@ logger = logging.getLogger(__name__)
 # Слаг сверен со списком моделей OpenRouter.
 DEFAULT_MODEL = "qwen/qwen3.8-27b"
 
-# Предел длины ответа. Без явного значения провайдер режет ответ по своему
-# умолчанию, и текст обрывается на полуслове — а если обрыв приходится
-# на середину числа, сверка законно бракует его целиком.
+# Бюджет ответа — предохранитель от бесконечной генерации, а не способ задать
+# длину текста. Длина задаётся в промпте, настройкой `llm_answer_max_words`.
 #
-# Запас взят с большим избытком над нужными 4-6 предложениями намеренно:
-# рассуждающие модели тратят часть бюджета на внутренние рассуждения, и при
-# тесном лимите на сам ответ токенов не остаётся, а поле content приходит пустым.
-DEFAULT_MAX_TOKENS = 2000
+# Разделение появилось не из любви к порядку. Прежние 2000 токенов выглядели
+# избытком над нужными 4-6 предложениями, но у рассуждающей модели внутренние
+# рассуждения расходуют тот же бюджет и расходуют его первыми. Замер на
+# `qwen3.8-27b` с настоящей полезной нагрузкой отчёта: 2000 токенов
+# рассуждения, ноль токенов ответа, `finish_reason = length`, пустой content —
+# и «Краткий вывод» в отчёте оставался пустым.
+#
+# Отсюда правило: бюджет считается от рассуждения, а не от длины текста,
+# и запас берётся кратный, а не процентный.
+DEFAULT_MAX_TOKENS = 6000
 
 
 class LLMUnavailable(RuntimeError):
@@ -48,6 +53,7 @@ class OpenRouterClient:
         self._model = settings.openrouter_model or DEFAULT_MODEL
         self._enabled = settings.llm_enabled
         self._timeout = settings.openrouter_timeout_seconds
+        self._max_tokens = settings.openrouter_max_tokens
 
     def is_available(self) -> bool:
         return bool(self._enabled and self._api_key)
@@ -57,7 +63,7 @@ class OpenRouterClient:
         system_prompt: str,
         user_prompt: str,
         temperature: float = 0.2,
-        max_tokens: int = DEFAULT_MAX_TOKENS,
+        max_tokens: int | None = None,
     ) -> str:
         """Получить текст от модели.
 
@@ -67,6 +73,7 @@ class OpenRouterClient:
         if not self.is_available():
             raise LLMUnavailable("ключ OpenRouter не задан или генерация отключена")
 
+        max_tokens = max_tokens or self._max_tokens
         payload = {
             "model": self._model,
             "temperature": temperature,
@@ -105,8 +112,12 @@ class OpenRouterClient:
         # достоверным, но им не является.
         finish_reason = choice.get("finish_reason")
         if finish_reason == "length":
+            # В сообщении указывается, сколько ушло на рассуждения: без этого
+            # числа причина выглядит как «модель многословна», а на деле текста
+            # может не быть вовсе. Именно так эта неисправность и пряталась.
             raise LLMUnavailable(
                 f"ответ модели обрезан по лимиту в {max_tokens} токенов"
+                f"{_reasoning_note(data)}"
             )
 
         # Поле content бывает пустым (null), если модель израсходовала бюджет
@@ -118,3 +129,12 @@ class OpenRouterClient:
                 f"модель вернула пустой ответ (причина завершения: {finish_reason})"
             )
         return text
+
+
+def _reasoning_note(data: dict) -> str:
+    """Сколько токенов бюджета израсходовано на внутренние рассуждения."""
+    details = ((data.get("usage") or {}).get("completion_tokens_details")) or {}
+    spent = details.get("reasoning_tokens")
+    if not spent:
+        return ""
+    return f", из них {spent} на внутренние рассуждения модели"
