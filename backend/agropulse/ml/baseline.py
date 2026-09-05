@@ -112,7 +112,10 @@ class BaselineMLClient:
         else:
             smoothed = interpolated
 
-        by_offset = {int(offset): float(value) for offset, value in zip(grid_offsets, smoothed)}
+        by_offset = {
+            int(offset): float(value)
+            for offset, value in zip(grid_offsets, smoothed, strict=True)
+        }
 
         predictions: list[Prediction] = []
         for target in request.targets:

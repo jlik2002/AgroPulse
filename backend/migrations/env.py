@@ -7,11 +7,10 @@ URL базы берётся из настроек приложения, а не 
 
 from logging.config import fileConfig
 
-from alembic import context
-from sqlalchemy import engine_from_config, pool
-
 from agropulse.config import get_settings
 from agropulse.db.models import Base
+from alembic import context
+from sqlalchemy import engine_from_config, pool
 
 config = context.config
 config.set_main_option("sqlalchemy.url", get_settings().database_url)

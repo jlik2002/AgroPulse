@@ -16,16 +16,26 @@ from __future__ import annotations
 import logging
 
 from agropulse.config import get_settings
+from agropulse.errors import UpstreamError
+from agropulse.ml.client import MLClient
 from agropulse.ml.http_client import HttpMLClient
 
 logger = logging.getLogger(__name__)
 
 
-class MLServiceUnavailable(RuntimeError):
-    """Сервис моделей недоступен, а заглушка запрещена настройкой."""
+class MLServiceUnavailable(UpstreamError):
+    """Сервис моделей недоступен, а заглушка запрещена настройкой.
+
+    Наследуется от ошибки внешней системы: недоступность сервиса моделей
+    временна по своей природе, и задача обязана быть повторена, а не
+    завершиться окончательной неудачей.
+    """
+
+    code = "ml_service_unavailable"
+    message = "сервис моделей недоступен"
 
 
-def get_client():
+def get_client() -> MLClient:
     """Клиент моделей, пригодный к работе прямо сейчас."""
     service = HttpMLClient()
     if service.is_available():
@@ -34,14 +44,19 @@ def get_client():
     settings = get_settings()
     if not settings.ml_use_dev_stub:
         raise MLServiceUnavailable(
-            f"сервис моделей недоступен по адресу {settings.ml_service_url}"
+            f"сервис моделей недоступен по адресу {settings.ml_service_url}",
+            ml_service_url=settings.ml_service_url,
         )
 
     # ВРЕМЕННО: убрать вместе с модулем заглушки после подключения сервиса.
     from agropulse.ml.baseline import BaselineMLClient
 
     logger.warning(
-        "Сервис моделей недоступен, используется ВРЕМЕННАЯ ЗАГЛУШКА "
-        "(приближение по соседним точкам). Это режим разработки."
+        "ml_dev_stub_used",
+        extra={
+            "reason": "сервис моделей недоступен, ряд восстанавливается "
+            "приближением по соседним точкам",
+            "ml_service_url": settings.ml_service_url,
+        },
     )
     return BaselineMLClient()

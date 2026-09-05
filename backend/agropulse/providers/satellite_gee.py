@@ -246,7 +246,9 @@ def _aggregate_by_date(raw: list[dict], source: str) -> list[SatelliteObservatio
 
         scene_ids = ",".join(str(r.get("scene_id")) for r in rows if r.get("scene_id"))
         valid_fraction = round(total_weight / len(rows), 4)
-        cloud_values = [r.get("cloud_fraction") for r in rows if r.get("cloud_fraction") is not None]
+        cloud_values = [
+            row.get("cloud_fraction") for row in rows if row.get("cloud_fraction") is not None
+        ]
         cloud_fraction = round(sum(cloud_values) / len(cloud_values), 4) if cloud_values else None
 
         observation = SatelliteObservation(

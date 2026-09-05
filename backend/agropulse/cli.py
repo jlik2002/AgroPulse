@@ -21,13 +21,16 @@ import argparse
 import csv
 import logging
 import math
+import statistics
 import sys
 from collections import defaultdict
 from datetime import date
 from pathlib import Path
 
+from agropulse.config import get_settings
 from agropulse.ml.client import ImputeRequest, SeriesPoint
 from agropulse.ml.resolve import get_client
+from agropulse.observability import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -160,8 +163,6 @@ def _fill_missing(
     predictions: dict[tuple[str, date], float],
 ) -> dict[tuple[str, date], float]:
     """Заполнить точки, для которых предсказание не получено."""
-    import statistics
-
     all_known = [
         row["ndvi"] for rows in by_polygon.values() for row in rows if row["ndvi"] is not None
     ]
@@ -217,7 +218,9 @@ def validate(input_path: Path, submission_path: Path) -> bool:
             seen.add(key)
 
             if key not in expected:
-                problems.append(f"строка {number}: {polygon} + {day} не является контрольной точкой")
+                problems.append(
+                    f"строка {number}: {polygon} + {day} не является контрольной точкой"
+                )
 
             value = _to_float(row.get(COLUMN_PREDICTION))
             if value is None:
@@ -239,7 +242,8 @@ def validate(input_path: Path, submission_path: Path) -> bool:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    settings = get_settings()
+    configure_logging(settings.log_level, settings.log_json)
 
     parser = argparse.ArgumentParser(prog="agropulse", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)

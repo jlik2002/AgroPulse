@@ -30,8 +30,6 @@ from agropulse.providers.base import ProviderError
 
 logger = logging.getLogger(__name__)
 
-HEALTH_TIMEOUT_SECONDS = 3.0
-
 
 class HttpMLClient:
     """Клиент моделей поверх HTTP."""
@@ -42,6 +40,7 @@ class HttpMLClient:
         settings = get_settings()
         self._base_url = settings.ml_service_url.rstrip("/")
         self._timeout = settings.ml_service_timeout_seconds
+        self._health_timeout = settings.ml_health_timeout_seconds
         self._model_version: str | None = None
 
     # ------------------------------------------------------------------
@@ -53,7 +52,7 @@ class HttpMLClient:
         не должна ждать полный таймаут запроса на каждом поле.
         """
         try:
-            response = httpx.get(f"{self._base_url}/health", timeout=HEALTH_TIMEOUT_SECONDS)
+            response = httpx.get(f"{self._base_url}/health", timeout=self._health_timeout)
             return response.status_code < 400
         except httpx.HTTPError:
             return False

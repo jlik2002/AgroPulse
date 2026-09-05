@@ -110,7 +110,12 @@ class AssetKind(str, enum.Enum):
 
 
 def _enum(py_enum: type[enum.Enum], name: str) -> Enum:
-    return Enum(py_enum, name=name, native_enum=False, values_callable=lambda e: [m.value for m in e])
+    return Enum(
+        py_enum,
+        name=name,
+        native_enum=False,
+        values_callable=lambda enum: [member.value for member in enum],
+    )
 
 
 # --------------------------------------------------------------------------
@@ -195,6 +200,13 @@ class Field(Base):
         back_populates="field", cascade="all, delete-orphan"
     )
 
+    __table_args__ = (
+        # Площадь проверяется при создании поля, но проверка в Python защищает
+        # только один путь записи. Данные приходят ещё и из batch-сценариев,
+        # поэтому инвариант закреплён в базе.
+        CheckConstraint("area_ha IS NULL OR area_ha > 0", name="ck_fields_area_positive"),
+    )
+
 
 # --------------------------------------------------------------------------
 # Наблюдения
@@ -252,6 +264,24 @@ class Observation(Base):
             "field_id", "date", "value_type", "source", name="uq_observation_identity"
         ),
         Index("ix_observations_field_date", "field_id", "date"),
+        # Анализ и отчёты почти всегда выбирают ряд одного типа значений
+        # (только наблюдения, только прогноз). Индекс закрывает такую выборку
+        # целиком, не заставляя базу отбрасывать лишние строки после чтения.
+        Index("ix_observations_field_type_date", "field_id", "value_type", "date"),
+        # Нормированная разность по определению лежит в [-1, 1]. Значение вне
+        # диапазона означает ошибку расчёта, и обнаружить её лучше при записи,
+        # чем на графике у пользователя. EVI не ограничиваем: его формула
+        # со свободным членом допускает выход за эти пределы.
+        CheckConstraint(
+            "(ndvi_mean IS NULL OR ndvi_mean BETWEEN -1 AND 1) "
+            "AND (ndmi_mean IS NULL OR ndmi_mean BETWEEN -1 AND 1)",
+            name="ck_observations_index_range",
+        ),
+        CheckConstraint(
+            "(valid_fraction IS NULL OR valid_fraction BETWEEN 0 AND 1) "
+            "AND (cloud_fraction IS NULL OR cloud_fraction BETWEEN 0 AND 1)",
+            name="ck_observations_fraction_range",
+        ),
     )
 
 
@@ -299,6 +329,7 @@ class Anomaly(Base):
 
     __table_args__ = (
         CheckConstraint("end_date >= start_date", name="ck_anomalies_period_order"),
+        CheckConstraint("duration_days > 0", name="ck_anomalies_duration_positive"),
     )
 
 
@@ -320,6 +351,13 @@ class ForecastRun(Base):
     insufficient_reason: Mapped[str | None] = mapped_column(String(200))
     factors: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        # Прогон замещается целиком при каждом пересчёте, поэтому строка на
+        # поле должна быть одна. Без ограничения два параллельных пересчёта
+        # оставили бы две строки, и чтение выбирало бы произвольную.
+        UniqueConstraint("field_id", name="uq_forecast_run_field"),
+    )
 
 
 # --------------------------------------------------------------------------
@@ -344,7 +382,9 @@ class Job(Base):
         ForeignKey("fields.id", ondelete="CASCADE"), index=True
     )
     stage: Mapped[PipelineStage] = mapped_column(_enum(PipelineStage, "pipeline_stage"))
-    status: Mapped[JobStatus] = mapped_column(_enum(JobStatus, "job_status"), default=JobStatus.QUEUED)
+    status: Mapped[JobStatus] = mapped_column(
+        _enum(JobStatus, "job_status"), default=JobStatus.QUEUED
+    )
     progress: Mapped[float] = mapped_column(Float, default=0.0)
     message: Mapped[str | None] = mapped_column(Text)
     error: Mapped[str | None] = mapped_column(Text)
@@ -354,6 +394,7 @@ class Job(Base):
 
     __table_args__ = (
         UniqueConstraint("field_id", "stage", name="uq_job_field_stage"),
+        CheckConstraint("progress BETWEEN 0 AND 1", name="ck_jobs_progress_range"),
     )
 
 
@@ -394,7 +435,8 @@ class RawCache(Base):
 
     __tablename__ = "raw_cache"
 
-    key: Mapped[str] = mapped_column(String(200), primary_key=True)  # хэш от провайдера и параметров
+    # Ключ — хэш от имени провайдера и параметров запроса.
+    key: Mapped[str] = mapped_column(String(200), primary_key=True)
     provider: Mapped[str] = mapped_column(String(50), index=True)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

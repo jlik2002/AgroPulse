@@ -5,24 +5,23 @@ SSE, а не WebSocket: поток односторонний, переподк�
 
 Единственный асинхронный эндпоинт сервиса. Остальные объявлены как `def` и
 выполняются в пуле потоков вместе с синхронным SQLAlchemy; здесь же база
-не нужна вовсе — только подписка на Redis.
+нужна только для первого сообщения — дальше идёт подписка на Redis.
 """
 
 import asyncio
 import json
 import logging
 import uuid
+from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Request
 from redis import asyncio as aioredis
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
-from agropulse.config import get_settings
-from agropulse.db.models import Job, Project
-from agropulse.db.session import get_db
-from agropulse.tasks.progress import STAGE_ORDER, STAGE_TITLES, channel
+from agropulse.api.deps import SettingsDep, UnitOfWorkDep
+from agropulse.errors import ProjectNotFoundError
+from agropulse.events import progress_channel
+from agropulse.services.progress import build_snapshot
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["events"])
@@ -34,7 +33,10 @@ HEARTBEAT_SECONDS = 15
 
 @router.get("/projects/{project_id}/events")
 async def project_events(
-    project_id: uuid.UUID, request: Request, db: Session = Depends(get_db)
+    project_id: uuid.UUID,
+    request: Request,
+    uow: UnitOfWorkDep,
+    settings: SettingsDep,
 ) -> EventSourceResponse:
     """Поток событий обработки проекта.
 
@@ -42,22 +44,22 @@ async def project_events(
     подключившийся к середине обработки, сразу видит полную картину,
     а не ждёт следующего события.
     """
-    if db.get(Project, project_id) is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="проект не найден")
+    if not uow.projects.exists(project_id):
+        raise ProjectNotFoundError(project_id=str(project_id))
 
-    snapshot = _build_snapshot(db, project_id)
-    settings = get_settings()
+    snapshot = build_snapshot(uow, project_id)
+    channel = progress_channel(project_id)
 
-    async def event_stream():
+    async def event_stream() -> AsyncIterator[dict]:
         yield {"event": "snapshot", "data": json.dumps(snapshot, ensure_ascii=False)}
 
+        # Собственный асинхронный клиент на соединение: подписка pub/sub
+        # занимает соединение целиком и не может делить его с другими.
         client = aioredis.from_url(settings.redis_cache_url, decode_responses=True)
         pubsub = client.pubsub()
-        await pubsub.subscribe(channel(project_id))
+        await pubsub.subscribe(channel)
         try:
-            while True:
-                if await request.is_disconnected():
-                    break
+            while not await request.is_disconnected():
                 message = await pubsub.get_message(
                     ignore_subscribe_messages=True, timeout=HEARTBEAT_SECONDS
                 )
@@ -69,40 +71,8 @@ async def project_events(
         except asyncio.CancelledError:
             raise
         finally:
-            await pubsub.unsubscribe(channel(project_id))
+            await pubsub.unsubscribe(channel)
             await pubsub.aclose()
             await client.aclose()
 
     return EventSourceResponse(event_stream())
-
-
-def _build_snapshot(db: Session, project_id: uuid.UUID) -> dict:
-    """Текущее состояние стадий по всем полям проекта."""
-    jobs = db.scalars(select(Job).where(Job.project_id == project_id)).all()
-
-    by_field: dict[str, list[dict]] = {}
-    for job in jobs:
-        by_field.setdefault(str(job.field_id), []).append(
-            {
-                "stage": job.stage.value,
-                "stage_title": STAGE_TITLES[job.stage],
-                "stage_index": STAGE_ORDER.index(job.stage) + 1,
-                "status": job.status.value,
-                "progress": job.progress,
-                "message": job.message,
-                "error": job.error,
-            }
-        )
-
-    for stages in by_field.values():
-        stages.sort(key=lambda item: item["stage_index"])
-
-    return {
-        "project_id": str(project_id),
-        "stage_total": len(STAGE_ORDER),
-        "stages": [
-            {"stage": stage.value, "title": STAGE_TITLES[stage], "index": index + 1}
-            for index, stage in enumerate(STAGE_ORDER)
-        ],
-        "fields": by_field,
-    }

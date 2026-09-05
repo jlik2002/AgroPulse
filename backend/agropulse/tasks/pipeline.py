@@ -1,579 +1,160 @@
-"""Задачи пайплайна обработки поля.
+"""Celery-задачи пайплайна: тонкие адаптеры над `services/pipeline.py`.
 
-Обработка разделена на две задачи по характеру нагрузки: `collect_field_data`
-ходит во внешние источники и стоит в очереди `collect`, `analyze_field` считает
-локально и стоит в очереди `analyze`. Поля обрабатываются независимо — отказ
-на одном не останавливает остальные.
+Задача не содержит бизнес-логики. Её работа — разобрать аргументы, задать
+политику повторов и пределы времени, обеспечить конечный статус при неудаче
+и передать управление сервису. Благодаря этому ту же обработку можно
+выполнить из теста или CLI, не поднимая брокер.
 
-Обе задачи идемпотентны: при `task_acks_late` рестарт воркера возвращает задачу
-в очередь, поэтому запись наблюдений идёт upsert'ом, а результаты анализа
-полностью замещают предыдущие.
+Имена задач и очереди менять нельзя: в брокере могут лежать сообщения,
+опубликованные предыдущей версией сервиса.
+
+Повтор выполняется только для `TransientPipelineError`. Повторять всё подряд
+означало бы повторять ошибки программирования и некорректные данные: воркеры
+заняты, диагностика отложена, результат тот же.
 """
 
 from __future__ import annotations
 
 import logging
 import uuid
-from datetime import date, timedelta
+from collections.abc import Callable
+from typing import Any
 
-from sqlalchemy import delete, select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from celery import Task
+from celery.exceptions import SoftTimeLimitExceeded
 
-from agropulse.analytics import anomalies as anomalies_module
-from agropulse.analytics import climatology as climatology_module
-from agropulse.analytics import risk as risk_module
-from agropulse.analytics.anomalies import SeriesSample
-from agropulse.analytics.climatology import phase_of
 from agropulse.config import get_settings
-from agropulse.db.models import (
-    Anomaly,
-    Field,
-    FieldStatus,
-    ForecastRun,
-    JobStatus,
-    Observation,
-    PipelineStage,
-    ValueType,
-)
-from agropulse.db.session import session_scope
-from agropulse.geometry import to_geojson
-from agropulse.ml.client import (
-    ForecastRequest,
-    ForecastResult,
-    ImputeRequest,
-    SeriesPoint,
-    WeatherPoint,
-)
-from agropulse.ml.resolve import get_client
-from agropulse.providers import chain
-from agropulse.tasks import progress
+from agropulse.errors import PipelineError, TransientPipelineError
+from agropulse.observability import task_context
+from agropulse.services.pipeline import FieldMissing, FieldPipeline
 from agropulse.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
+_settings = get_settings()
+
+# Общая политика повторов. Экспоненциальная задержка с разбросом: без разброса
+# все задачи, упавшие из-за одного отказа GEE, вернутся одновременно и повторят
+# его же.
+_RETRY_POLICY: dict[str, Any] = {
+    "autoretry_for": (TransientPipelineError,),
+    "retry_backoff": True,
+    "retry_jitter": True,
+    "max_retries": _settings.task_max_retries,
+}
+
+_TIMEOUT_ERROR_CODE = "task_timeout"
 
 
-# ----------------------------------------------------------------------
-# Сбор данных
-# ----------------------------------------------------------------------
+def _execute(
+    task: Task,
+    field_id: str,
+    operation: Callable[[FieldPipeline, uuid.UUID], dict],
+    error_code: str,
+) -> dict:
+    """Выполнить операцию пайплайна с гарантией конечного состояния.
 
+    Единственное место, где решается судьба неудачной обработки. Правила:
 
-@celery_app.task(name="agropulse.tasks.pipeline.collect_field_data", bind=True)
-def collect_field_data(self, field_id: str) -> dict:
-    """Собрать спутниковые наблюдения и погоду по одному полю."""
-    field_uuid = uuid.UUID(field_id)
-    settings = get_settings()
-
-    with session_scope() as db:
-        field = db.get(Field, field_uuid)
-        if field is None:
-            logger.warning("Поле %s не найдено, задача пропущена", field_id)
-            return {"field_id": field_id, "status": "not_found"}
-
-        project_uuid = field.project_id
-        geometry = to_geojson(field.geom)
-        centroid = _centroid(geometry)
-        period_from = field.project.period_from
-        period_to = field.project.period_to
-
-    # История за предыдущие сезоны нужна для климатической нормы. Пользователь
-    # мог выбрать короткий период, но норму по нему не построить, поэтому
-    # глубина запроса определяется настройкой, а не выбором в интерфейсе.
-    history_from = date(period_from.year - settings.history_seasons, 1, 1)
-
-    satellite = None
-    weather = None
-    errors: list[str] = []
-
-    with progress.StageTracker(project_uuid, field_uuid, PipelineStage.SEARCH_SCENES) as stage:
-        stage.message(f"период {history_from} — {period_to}")
-        satellite = chain.fetch_satellite_series(geometry, history_from, period_to)
-        errors += satellite.errors
-        if not satellite.ok:
-            raise RuntimeError("; ".join(satellite.errors) or "источники не вернули данных")
-        stage.message(f"сцен получено: {len(satellite.items)}", 1.0)
-
-    # Маскирование облаков и расчёт индексов выполняются внутри провайдера
-    # одним серверным запросом, поэтому отдельными стадиями только отчитываемся.
-    usable = sum(1 for item in satellite.items if item.ndvi_mean is not None)
-    cloudy = len(satellite.items) - usable
-    with progress.StageTracker(project_uuid, field_uuid, PipelineStage.CLOUD_MASKING) as stage:
-        stage.message(f"непригодных по облачности: {cloudy}", 1.0)
-    with progress.StageTracker(project_uuid, field_uuid, PipelineStage.INDICES) as stage:
-        stage.message(f"индексы рассчитаны для {usable} дат", 1.0)
-
-    with progress.StageTracker(project_uuid, field_uuid, PipelineStage.WEATHER) as stage:
-        weather = chain.fetch_weather_history(
-            centroid[0], centroid[1], history_from, period_to
-        )
-        errors += weather.errors
-        # Погода — контекст, а не основа расчёта: её отсутствие ухудшает
-        # объяснение аномалий, но не мешает их найти.
-        stage.message(f"суток погоды: {len(weather.items)}", 1.0)
-
-    with progress.StageTracker(project_uuid, field_uuid, PipelineStage.TIMESERIES):
-        with session_scope() as db:
-            stored = _store_observations(db, field_uuid, satellite.items, weather.items)
-            field = db.get(Field, field_uuid)
-            if field is not None:
-                field.data_quality = {
-                    "satellite_source": satellite.source,
-                    "weather_source": weather.source,
-                    "scenes_total": len(satellite.items),
-                    "scenes_usable": usable,
-                    "history_from": history_from.isoformat(),
-                    "period_from": period_from.isoformat(),
-                    "period_to": period_to.isoformat(),
-                    "provider_errors": errors or None,
-                }
-                if usable == 0:
-                    field.status = FieldStatus.INSUFFICIENT_DATA
-
-    logger.info("Поле %s: сохранено %s дат, пригодных %s", field_id, stored, usable)
-    return {
-        "field_id": field_id,
-        "status": "ok" if usable else "insufficient_data",
-        "stored": stored,
-        "usable": usable,
-        "satellite_source": satellite.source,
-        "weather_source": weather.source,
-        "errors": errors or None,
-    }
-
-
-def _centroid(geometry: dict) -> tuple[float, float]:
-    from shapely.geometry import shape
-
-    point = shape(geometry).centroid
-    return point.x, point.y
-
-
-def _store_observations(db, field_id: uuid.UUID, satellite: list, weather: list) -> int:
-    """Записать наблюдения, сшив спутниковые данные с погодой по дате."""
-    if not satellite:
-        return 0
-
-    weather_by_date = {item.date: item for item in weather}
-
-    rows = []
-    for item in satellite:
-        day_weather = weather_by_date.get(item.date)
-        rows.append(
-            {
-                "field_id": field_id,
-                "date": item.date,
-                "value_type": ValueType.OBSERVED,
-                "source": item.source,
-                "ndvi_mean": item.ndvi_mean,
-                "ndmi_mean": item.ndmi_mean,
-                "evi_mean": item.evi_mean,
-                "valid_fraction": item.valid_fraction,
-                "cloud_fraction": item.cloud_fraction,
-                "scene_id": item.scene_id,
-                "missing_reason": item.missing_reason,
-                "temperature": day_weather.temperature if day_weather else None,
-                "precipitation": day_weather.precipitation if day_weather else None,
-            }
-        )
-
-    statement = pg_insert(Observation).values(rows)
-    statement = statement.on_conflict_do_update(
-        constraint="uq_observation_identity",
-        set_={
-            column: statement.excluded[column]
-            for column in (
-                "ndvi_mean", "ndmi_mean", "evi_mean", "valid_fraction", "cloud_fraction",
-                "scene_id", "missing_reason", "temperature", "precipitation",
-            )
-        },
-    )
-    db.execute(statement)
-    return len(rows)
-
-
-# ----------------------------------------------------------------------
-# Анализ
-# ----------------------------------------------------------------------
-
-
-@celery_app.task(name="agropulse.tasks.pipeline.analyze_field", bind=True)
-def analyze_field(self, field_id: str) -> dict:
-    """Восстановить пропуски, найти аномалии, оценить риск."""
-    field_uuid = uuid.UUID(field_id)
-
-    with session_scope() as db:
-        field = db.get(Field, field_uuid)
-        if field is None:
-            return {"field_id": field_id, "status": "not_found"}
-
-        project_uuid = field.project_id
-        sowing_date = field.sowing_date
-        period_from = field.project.period_from
-        period_to = field.project.period_to
-        centroid = _centroid(to_geojson(field.geom))
-
-        observations = db.scalars(
-            select(Observation)
-            .where(
-                Observation.field_id == field_uuid,
-                Observation.value_type == ValueType.OBSERVED,
-            )
-            .order_by(Observation.date)
-        ).all()
-
-        observed = [(o.date, o.ndvi_mean) for o in observations if o.ndvi_mean is not None]
-        observed_dates = {day for day, _ in observed}
-        weather_by_date = {o.date: (o.temperature, o.precipitation) for o in observations}
-        ndmi_by_date = {o.date: o.ndmi_mean for o in observations if o.ndmi_mean is not None}
-        valid_fractions = [
-            o.valid_fraction for o in observations
-            if o.ndvi_mean is not None and o.valid_fraction is not None
-        ]
-
-    # Погода нужна на каждый день сетки, а в наблюдениях она есть только на
-    # датах сцен. Повторный запрос почти бесплатен: ответ лежит в кэше с
-    # прошлой стадии сбора.
-    daily_weather = chain.fetch_weather_history(centroid[0], centroid[1], period_from, period_to)
-    for item in daily_weather.items:
-        weather_by_date.setdefault(item.date, (item.temperature, item.precipitation))
-        if weather_by_date[item.date] == (None, None):
-            weather_by_date[item.date] = (item.temperature, item.precipitation)
-
-    # Целевые даты восстановления — сплошная суточная сетка внутри периода
-    # анализа. Дат, когда спутник не пролетал, в наблюдениях нет вовсе, поэтому
-    # без такой сетки они бы остались дырой в графике: восстанавливать было бы
-    # нечего. История прошлых сезонов остаётся на датах сцен — она нужна только
-    # для климатической нормы, где окно и так ±15 дней.
-    gap_dates = [
-        period_from + timedelta(days=offset)
-        for offset in range((period_to - period_from).days + 1)
-        if (period_from + timedelta(days=offset)) not in observed_dates
-    ]
-
-    # --- восстановление пропусков ---
-    restored: list = []
-    with progress.StageTracker(project_uuid, field_uuid, PipelineStage.GAP_FILLING) as stage:
-        client = get_client()
-        result = client.impute(
-            ImputeRequest(
-                polygon_id=str(field_uuid),
-                observations=[SeriesPoint(date=day, primary_ndvi=value) for day, value in observed],
-                targets=gap_dates,
-            )
-        )
-        restored = result.predictions
-        restored_source = result.source
-        stage.message(
-            f"восстановлено {len(restored)} из {len(gap_dates)} дат суточной сетки", 1.0
-        )
-
-        with session_scope() as db:
-            _store_restored(db, field_uuid, restored, weather_by_date, restored_source)
-
-    # --- климатология и аномалии ---
-    with progress.StageTracker(project_uuid, field_uuid, PipelineStage.ANOMALIES) as stage:
-        samples: list[SeriesSample] = [
-            SeriesSample(
-                date=day,
-                ndvi=value,
-                value_type=ValueType.OBSERVED,
-                ndmi=ndmi_by_date.get(day),
-                temperature=(weather_by_date.get(day) or (None, None))[0],
-                precipitation=(weather_by_date.get(day) or (None, None))[1],
-            )
-            for day, value in observed
-        ]
-        samples += [
-            SeriesSample(
-                date=item.date,
-                ndvi=item.value,
-                value_type=ValueType.RESTORED,
-                ndmi=ndmi_by_date.get(item.date),
-                temperature=(weather_by_date.get(item.date) or (None, None))[0],
-                precipitation=(weather_by_date.get(item.date) or (None, None))[1],
-            )
-            for item in restored
-        ]
-
-        # Норма строится по прошлым сезонам; текущий год исключается, иначе
-        # аномалия вошла бы в собственную норму и замаскировала себя.
-        in_period = [s for s in samples if period_from <= s.date <= period_to]
-
-        # Целевые фазы включают горизонт прогноза: без этого норма не покроет
-        # будущие даты и прогноз строить будет не от чего.
-        horizon_days = get_settings().forecast_horizon_days
-        last_observed = max((s.date for s in samples), default=period_to)
-        forecast_dates = [
-            last_observed + timedelta(days=offset) for offset in range(1, horizon_days + 1)
-        ]
-
-        climatology = climatology_module.build(
-            history=[(s.date, s.ndvi) for s in samples],
-            target_dates=[s.date for s in in_period] + forecast_dates,
-            sowing_date=sowing_date,
-            exclude_year=period_to.year,
-        )
-        periods, zscores = anomalies_module.detect(in_period, climatology, sowing_date)
-        stage.message(
-            f"аномальных периодов: {len(periods)}"
-            if climatology.available
-            else (climatology.reason or "норма не построена"),
-            1.0,
-        )
-
-    # --- прогноз и риск ---
-    with progress.StageTracker(project_uuid, field_uuid, PipelineStage.RISK_FORECAST) as stage:
-        forecast = _build_forecast(
-            client=client,
-            field_uuid=field_uuid,
-            samples=samples,
-            climatology=climatology,
-            sowing_date=sowing_date,
-            centroid=centroid,
-            horizon_days=horizon_days,
-        )
-        stage.message(
-            f"прогноз на {len(forecast.points)} суток, динамика {forecast.direction}"
-            if forecast.points
-            else f"прогноз не построен: {forecast.insufficient_reason}",
-            0.5,
-        )
-
-        # В оценку идут z-score, а не сырые значения: см. analytics/risk.py
-        recent = [(day, z) for day, z in zscores.items()]
-        restored_in_period = sum(1 for s in in_period if s.value_type == ValueType.RESTORED)
-        assessment = risk_module.assess(
-            anomalies=periods,
-            recent_zscores=recent,
-            observed_count=sum(1 for s in in_period if s.value_type == ValueType.OBSERVED),
-            mean_valid_fraction=(
-                sum(valid_fractions) / len(valid_fractions) if valid_fractions else None
-            ),
-            restored_fraction=(restored_in_period / len(in_period)) if in_period else 0.0,
-            climatology_available=climatology.available,
-        )
-        stage.message(
-            f"риск {assessment.score}" if assessment.score is not None
-            else (assessment.insufficient_reason or "риск не рассчитан"),
-            1.0,
-        )
-
-    with session_scope() as db:
-        _store_analysis(db, field_uuid, periods, zscores, assessment, climatology)
-        _store_forecast(db, field_uuid, forecast)
-
-    # Стадия визуализации на текущем этапе ничего не готовит: слои снимков
-    # добавляются позже. Отмечаем её, чтобы список стадий был полным.
-    with progress.StageTracker(project_uuid, field_uuid, PipelineStage.VISUALIZATION) as stage:
-        stage.message("данные готовы к отображению", 1.0)
-
-    summary = {
-        "status": assessment.status.value,
-        "risk_score": assessment.score,
-        "anomalies": len(periods),
-        "restored": len(restored),
-        "forecast_days": len(forecast.points),
-        "forecast_direction": forecast.direction,
-    }
-    progress.field_finished(project_uuid, field_uuid, assessment.status.value, summary)
-
-    logger.info("Поле %s: %s", field_id, summary)
-    return {"field_id": field_id, **summary}
-
-
-def _store_restored(
-    db, field_id: uuid.UUID, predictions: list, weather_by_date: dict, source: str
-) -> None:
-    """Заместить восстановленные значения.
-
-    Сначала удаляем прежние: изменившийся набор наблюдений мог сделать часть
-    старых восстановлений неверными, а upsert оставил бы их в ряду.
+    * поля больше нет — задача завершается штатно, повторять нечего;
+    * временная ошибка — повтор, а на последней попытке поле помечается
+      неудачей: иначе оно навсегда осталось бы в ожидании;
+    * превышение мягкого лимита времени и любая другая ошибка — конечный
+      статус сразу, без повтора.
     """
-    db.execute(
-        delete(Observation).where(
-            Observation.field_id == field_id,
-            Observation.value_type == ValueType.RESTORED,
-        )
-    )
-    if not predictions:
-        return
+    settings = get_settings()
+    field_uuid = uuid.UUID(field_id)
+    task_id = task.request.id
+    # Номер попытки попадает во все записи задачи: по нему видно, сколько
+    # повторов реально происходит, и стоит ли за ними системная проблема.
+    attempt = task.request.retries
 
-    rows = []
-    for item in predictions:
-        temperature, precipitation = weather_by_date.get(item.date) or (None, None)
-        rows.append(
-            {
-                "field_id": field_id,
-                "date": item.date,
-                "value_type": ValueType.RESTORED,
-                "source": source,
-                "ndvi_mean": item.value,
-                "confidence": item.confidence,
-                "temperature": temperature,
-                "precipitation": precipitation,
-            }
-        )
-    db.execute(pg_insert(Observation).values(rows))
-
-
-def _store_analysis(
-    db, field_id: uuid.UUID, periods: list, zscores: dict, assessment, climatology
-) -> None:
-    """Записать аномалии, z-score и оценку риска."""
-    db.execute(delete(Anomaly).where(Anomaly.field_id == field_id))
-    for period in periods:
-        db.add(
-            Anomaly(
-                field_id=field_id,
-                start_date=period.start_date,
-                end_date=period.end_date,
-                duration_days=period.duration_days,
-                severity=period.severity,
-                max_zscore=period.max_zscore,
-                mean_zscore=period.mean_zscore,
-                restored_fraction=period.restored_fraction,
-                confidence=period.confidence,
-                factors=period.factors,
+    with task_context(task_id):
+        pipeline = FieldPipeline(settings, task_id=task_id)
+        try:
+            result = operation(pipeline, field_uuid)
+            if attempt:
+                logger.info(
+                    "pipeline_recovered_after_retry",
+                    extra={"field_id": field_id, "attempt": attempt},
+                )
+            return result
+        except FieldMissing:
+            logger.warning("field_missing_task_skipped", extra={"field_id": field_id})
+            return {"field_id": field_id, "status": "not_found"}
+        except TransientPipelineError as exc:
+            if attempt >= task.max_retries:
+                logger.error(
+                    "pipeline_retries_exhausted",
+                    extra={"field_id": field_id, "error_code": exc.code, "attempt": attempt},
+                )
+                pipeline.mark_failed(field_uuid, exc.code)
+            else:
+                logger.warning(
+                    "pipeline_transient_failure",
+                    extra={"field_id": field_id, "error_code": exc.code, "attempt": attempt},
+                )
+            raise
+        except SoftTimeLimitExceeded:
+            logger.error("pipeline_timeout", extra={"field_id": field_id, "attempt": attempt})
+            pipeline.mark_failed(field_uuid, _TIMEOUT_ERROR_CODE)
+            raise
+        except Exception as exc:
+            code = exc.code if isinstance(exc, PipelineError) else error_code
+            logger.exception(
+                "pipeline_failed",
+                extra={"field_id": field_id, "error_code": code, "attempt": attempt},
             )
-        )
-
-    for observation in db.scalars(
-        select(Observation).where(Observation.field_id == field_id)
-    ).all():
-        observation.ndvi_zscore = zscores.get(observation.date)
-
-    field = db.get(Field, field_id)
-    if field is None:
-        return
-
-    field.status = assessment.status
-    field.risk_score = assessment.score
-    field.risk_breakdown = {
-        "score": assessment.score,
-        "weights": assessment.breakdown,
-        "explanation": assessment.explanation,
-        "confidence": assessment.confidence,
-        "insufficient_reason": assessment.insufficient_reason,
-        "climatology": {
-            "available": climatology.available,
-            "phase_kind": climatology.phase_kind,
-            "sowing_known": climatology.sowing_known,
-            "seasons_used": climatology.seasons_used,
-            "samples": climatology.samples_total,
-            "reason": climatology.reason,
-        },
-    }
+            pipeline.mark_failed(field_uuid, code)
+            raise
 
 
-@celery_app.task(name="agropulse.tasks.pipeline.process_field", bind=True)
-def process_field(self, field_id: str) -> dict:
+@celery_app.task(
+    name="agropulse.tasks.pipeline.collect_field_data",
+    bind=True,
+    soft_time_limit=_settings.collect_soft_time_limit_seconds,
+    time_limit=_settings.collect_time_limit_seconds,
+    **_RETRY_POLICY,
+)
+def collect_field_data(self: Task, field_id: str) -> dict:
+    """Собрать спутниковые наблюдения и погоду по одному полю."""
+    return _execute(self, field_id, lambda p, fid: p.collect(fid), "collect_failed")
+
+
+@celery_app.task(
+    name="agropulse.tasks.pipeline.analyze_field",
+    bind=True,
+    soft_time_limit=_settings.analyze_soft_time_limit_seconds,
+    time_limit=_settings.analyze_time_limit_seconds,
+    **_RETRY_POLICY,
+)
+def analyze_field(self: Task, field_id: str) -> dict:
+    """Восстановить пропуски, найти аномалии, оценить риск и прогноз."""
+    return _execute(self, field_id, lambda p, fid: p.analyze(fid), "analyze_failed")
+
+
+@celery_app.task(
+    name="agropulse.tasks.pipeline.process_field",
+    bind=True,
+    soft_time_limit=(
+        _settings.collect_soft_time_limit_seconds + _settings.analyze_soft_time_limit_seconds
+    ),
+    time_limit=(
+        _settings.collect_time_limit_seconds + _settings.analyze_time_limit_seconds
+    ),
+    **_RETRY_POLICY,
+)
+def process_field(self: Task, field_id: str) -> dict:
     """Полный цикл по полю: сбор и следом анализ.
 
     Отдельная задача-обёртка нужна, чтобы интерфейс запускал обработку одним
-    вызовом, а не выстраивал цепочку сам.
+    вызовом, а не выстраивал цепочку сам. Повтор возвращает к началу цикла:
+    сбор идемпотентен, поэтому повторный проход не портит уже собранное.
     """
-    collected = collect_field_data.run(field_id)
-    if collected.get("status") == "not_found":
-        return collected
-    analyzed = analyze_field.run(field_id)
+    return _execute(self, field_id, _collect_then_analyze, "process_failed")
+
+
+def _collect_then_analyze(pipeline: FieldPipeline, field_id: uuid.UUID) -> dict:
+    collected = pipeline.collect(field_id)
+    analyzed = pipeline.analyze(field_id)
     return {**collected, **analyzed}
-
-
-def _build_forecast(
-    client, field_uuid, samples, climatology, sowing_date, centroid, horizon_days
-):
-    """Построить прогноз NDVI на горизонт вперёд.
-
-    Норма нужна на будущие даты, а `Climatology` рассчитана по фазам,
-    встреченным в прошлом. Поэтому оценки для дат горизонта достаются
-    из той же таблицы фаз по дню года.
-    """
-    if not samples:
-        return _empty_forecast("нет наблюдений для прогноза")
-
-    last_date = max(sample.date for sample in samples)
-    horizon = [last_date + timedelta(days=offset) for offset in range(1, horizon_days + 1)]
-
-    norms: dict[date, tuple[float, float]] = {}
-    for day in horizon:
-        point = climatology.estimate(phase_of(day))
-        if point is not None:
-            norms[day] = (point.mean, point.std)
-
-    # Прогноз погоды — контекст для модели. Его отсутствие не блокирует расчёт.
-    weather = chain.fetch_weather_forecast(centroid[0], centroid[1], horizon_days)
-
-    return client.forecast(
-        ForecastRequest(
-            polygon_id=str(field_uuid),
-            observations=[
-                SeriesPoint(date=sample.date, primary_ndvi=sample.ndvi) for sample in samples
-            ],
-            horizon_days=horizon_days,
-            sowing_date=sowing_date,
-            weather_forecast=[
-                WeatherPoint(
-                    date=item.date,
-                    temperature=item.temperature,
-                    precipitation=item.precipitation,
-                )
-                for item in weather.items
-            ],
-            climatology=norms,
-        )
-    )
-
-
-def _empty_forecast(reason: str) -> ForecastResult:
-    """Пустой прогноз с указанием причины."""
-    return ForecastResult(
-        points=[], model_version="none", source="none", insufficient_reason=reason
-    )
-
-
-def _store_forecast(db, field_id: uuid.UUID, forecast) -> None:
-    """Записать прогноз: метаданные прогона и точки как наблюдения.
-
-    Точки лежат в той же таблице с value_type='forecast', поэтому график
-    и выгрузка CSV собираются одним запросом, без склейки двух источников.
-    """
-    db.execute(delete(ForecastRun).where(ForecastRun.field_id == field_id))
-    db.execute(
-        delete(Observation).where(
-            Observation.field_id == field_id,
-            Observation.value_type == ValueType.FORECAST,
-        )
-    )
-
-    db.add(
-        ForecastRun(
-            field_id=field_id,
-            horizon_days=len(forecast.points),
-            model_version=forecast.model_version,
-            direction=forecast.direction,
-            risk_level=forecast.risk_level,
-            confidence=forecast.confidence,
-            insufficient_reason=forecast.insufficient_reason,
-        )
-    )
-
-    if not forecast.points:
-        return
-
-    db.execute(
-        pg_insert(Observation).values(
-            [
-                {
-                    "field_id": field_id,
-                    "date": point.date,
-                    "value_type": ValueType.FORECAST,
-                    "source": forecast.source,
-                    "ndvi_mean": point.value,
-                    "ndvi_lo": point.low,
-                    "ndvi_hi": point.high,
-                    "confidence": forecast.confidence,
-                }
-                for point in forecast.points
-            ]
-        )
-    )
