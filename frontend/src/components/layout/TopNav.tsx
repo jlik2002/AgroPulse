@@ -25,7 +25,7 @@ const TONES = {
 
 export function TopNav({ items, projectLabel, status }: TopNavProps) {
   return (
-    <header className="sticky top-0 z-[900] border-b border-line bg-white/95 backdrop-blur">
+    <header className="sticky top-0 z-nav border-b border-line bg-white/95 backdrop-blur">
       <div className="flex h-[68px] items-center gap-10 px-7">
         <NavLink to="/" aria-label="AgroPulse — на главную">
           <Logo />

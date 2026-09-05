@@ -69,7 +69,7 @@ export function FieldListItem({
                 <Popover.Content
                   align="end"
                   sideOffset={4}
-                  className="z-[1200] w-52 overflow-hidden rounded-xl border border-line bg-white p-1.5 shadow-pop animate-fade-in"
+                  className="z-popover w-52 overflow-hidden rounded-xl border border-line bg-white p-1.5 shadow-pop animate-fade-in"
                 >
                   <Popover.Close asChild>
                     <button

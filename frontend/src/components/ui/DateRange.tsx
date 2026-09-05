@@ -55,7 +55,7 @@ export function DateRange({ from, to, onChange, className, min, max, disabled }:
         <Popover.Content
           align="start"
           sideOffset={6}
-          className="z-[1200] w-[320px] rounded-xl border border-line bg-white p-4 shadow-pop animate-fade-in"
+          className="z-popover w-[320px] rounded-xl border border-line bg-white p-4 shadow-pop animate-fade-in"
         >
           <div className="grid grid-cols-2 gap-3">
             <label className="block">

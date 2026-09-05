@@ -150,7 +150,7 @@ export function DataExplorer({
               <Popover.Content
                 align="end"
                 sideOffset={6}
-                className="z-[1200] w-64 rounded-xl border border-line bg-white p-4 shadow-pop animate-fade-in"
+                className="z-popover w-64 rounded-xl border border-line bg-white p-4 shadow-pop animate-fade-in"
               >
                 <p className="mb-3 text-[13px] font-medium text-ink-soft">Столбцы таблицы</p>
                 <div className="space-y-2.5">

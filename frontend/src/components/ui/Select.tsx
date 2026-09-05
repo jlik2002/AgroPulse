@@ -53,7 +53,7 @@ export function Select({
         <RadixSelect.Content
           position="popper"
           sideOffset={6}
-          className="z-[1200] max-h-72 min-w-[--radix-select-trigger-width] overflow-hidden rounded-xl border border-line bg-white shadow-pop animate-fade-in"
+          className="z-popover max-h-72 min-w-[--radix-select-trigger-width] overflow-hidden rounded-xl border border-line bg-white shadow-pop animate-fade-in"
         >
           <RadixSelect.Viewport className="p-1.5">
             {options.map((option) => (

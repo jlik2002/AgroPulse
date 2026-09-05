@@ -221,7 +221,7 @@ export function FieldsPage() {
       <div className="relative min-w-0 flex-1">
         <MapCanvas basemap={basemap} onReady={setMap}>
           <ScaleBar />
-          <div className="absolute bottom-[92px] left-6 z-[500]">
+          <div className="absolute bottom-[92px] left-6 z-map">
             <ZoomControls
               onLocate={
                 fieldBounds
@@ -282,7 +282,7 @@ export function FieldsPage() {
         </MapCanvas>
 
         <RegionSearch
-          className="absolute left-6 top-6 z-[500] w-[400px]"
+          className="absolute left-6 top-6 z-map w-[400px]"
           onSelect={onRegionSelect}
           onCoordinates={(lat, lon) => {
             setRegionBounds(null);
@@ -291,21 +291,21 @@ export function FieldsPage() {
         />
 
         <Segmented
-          className="absolute right-6 top-6 z-[500] shadow-card"
+          className="absolute right-6 top-6 z-map shadow-card"
           value={basemap}
           options={BASEMAP_OPTIONS}
           onChange={(value) => setBasemap(value as BasemapKind)}
         />
 
         <MapToolbar
-          className="absolute left-6 top-[104px] z-[500]"
+          className="absolute left-6 top-[104px] z-map"
           tool={tool}
           onChange={onToolChange}
           parcelsLoading={searchParcels.isPending}
         />
 
         {tool === "parcels" ? (
-          <div className="absolute bottom-6 left-1/2 z-[500] -translate-x-1/2">
+          <div className="absolute bottom-6 left-1/2 z-map -translate-x-1/2">
             <div className="flex items-center gap-3 rounded-xl border border-line bg-white px-4 py-2.5 shadow-pop">
               <span
                 className={cn(
@@ -337,7 +337,7 @@ export function FieldsPage() {
         ) : null}
 
         {tool === "draw" ? (
-          <div className="pointer-events-none absolute bottom-6 left-1/2 z-[500] -translate-x-1/2 rounded-xl bg-brand-900/92 px-4 py-2.5 text-[13.5px] text-white shadow-pop">
+          <div className="pointer-events-none absolute bottom-6 left-1/2 z-map -translate-x-1/2 rounded-xl bg-brand-900/92 px-4 py-2.5 text-[13.5px] text-white shadow-pop">
             Отмечайте вершины по контуру поля, замкните контур в первой точке
           </div>
         ) : null}

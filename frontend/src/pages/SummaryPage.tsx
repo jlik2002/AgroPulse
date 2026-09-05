@@ -147,7 +147,7 @@ export function SummaryPage() {
               })}
             </MapCanvas>
 
-            <div className="absolute bottom-4 left-4 z-[500] flex items-center gap-5 rounded-xl bg-white/95 px-4 py-2.5 shadow-card">
+            <div className="absolute bottom-4 left-4 z-map flex items-center gap-5 rounded-xl bg-white/95 px-4 py-2.5 shadow-card">
               <LegendDot color="#E5252C" label="Критическое" />
               <LegendDot color="#E9A317" label="Требует внимания" />
               <LegendDot color="#0F4730" label="Без аномалий" />

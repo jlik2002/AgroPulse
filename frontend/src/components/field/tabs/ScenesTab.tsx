@@ -212,7 +212,7 @@ function ScenePane({
   return (
     <div className="relative">
       <FieldStatePanel field={field} observation={scene} mode={mode} height={380} />
-      <div className="pointer-events-none absolute left-4 top-4 z-[500] rounded-xl bg-white/95 px-4 py-3 shadow-card">
+      <div className="pointer-events-none absolute left-4 top-4 z-map rounded-xl bg-white/95 px-4 py-3 shadow-card">
         <div className="flex items-center gap-3">
           <span className="text-[16px] font-semibold text-ink">{formatDate(scene.date)}</span>
           {role ? (

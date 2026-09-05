@@ -76,7 +76,7 @@ export function FieldStatePanel({
         <FieldShape geometry={field.geometry} style={{ ...fill, weight: 3 }} interactive={false} />
       </MapCanvas>
 
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[500] p-4">
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-map p-4">
         {mode === "rgb" ? (
           <div className="pointer-events-auto inline-flex items-center gap-2 rounded-lg bg-white/95 px-3.5 py-2 text-[13px] text-ink-soft shadow-card">
             Обзорная подложка: снимка за выбранную дату нет

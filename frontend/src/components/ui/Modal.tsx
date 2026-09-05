@@ -26,10 +26,10 @@ export function Modal({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[1400] bg-[#0B1A12]/45 animate-fade-in" />
+        <Dialog.Overlay className="fixed inset-0 z-modal bg-[#0B1A12]/45 animate-fade-in" />
         <Dialog.Content
           className={cn(
-            "fixed left-1/2 top-1/2 z-[1401] w-[min(640px,calc(100vw-32px))] max-h-[calc(100vh-48px)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl bg-white p-7 shadow-modal scroll-thin animate-slide-up",
+            "fixed left-1/2 top-1/2 z-dialog w-[min(640px,calc(100vw-32px))] max-h-[calc(100vh-48px)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl bg-white p-7 shadow-modal scroll-thin animate-slide-up",
             className,
           )}
         >

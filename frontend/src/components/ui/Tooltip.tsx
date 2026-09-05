@@ -17,7 +17,7 @@ export function Tooltip({ children, content, side = "top" }: InfoTooltipProps) {
           <RadixTooltip.Content
             side={side}
             sideOffset={6}
-            className="z-[1300] max-w-[280px] rounded-lg border border-line bg-white px-3 py-2 text-[12.5px] leading-snug text-ink-soft shadow-pop animate-fade-in"
+            className="z-tooltip max-w-[280px] rounded-lg border border-line bg-white px-3 py-2 text-[12.5px] leading-snug text-ink-soft shadow-pop animate-fade-in"
           >
             {content}
           </RadixTooltip.Content>
