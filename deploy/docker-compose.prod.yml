@@ -1,0 +1,43 @@
+# Надстройка над docker-compose.yml для сервера.
+#
+# Применяется вместе с базовым файлом:
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml up -d
+#
+# Делает две вещи. Первая — все порты публикуются только на 127.0.0.1:
+# наружу смотрит единственный процесс, host-nginx с basic-аутентификацией.
+# Без этого postgres, redis и консоль MinIO торчали бы в интернет напрямую,
+# в обход всякой авторизации. Вторая — uvicorn поднимается без --reload:
+# сторож файловой системы на сервере только держит память и роняет процесс
+# при правке кода на горячую.
+
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"
+
+  minio:
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+
+  api:
+    command: ["uvicorn", "agropulse.main:create_app", "--factory",
+              "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+
+  web:
+    ports:
+      - "127.0.0.1:5173:80"
+    restart: unless-stopped
+
+  worker-collect:
+    restart: unless-stopped
+
+  worker-analyze:
+    restart: unless-stopped
