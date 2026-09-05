@@ -117,12 +117,26 @@ class RadarEvent:
     confirmed: bool = True
 
 
+# Вердикт радара по окну события.
+RADAR_AGREES = "agrees"        # радар показывает согласованное изменение
+RADAR_SILENT = "silent"        # снимки в окне есть, изменений не видно
+RADAR_NO_DATA = "no_data"      # снимков в окне нет, проверить нечем
+
+
 @dataclass(slots=True)
 class Corroboration:
     """Подтверждённость события независимыми источниками."""
 
     score: int
     level: str
+    # Что именно сказал радар. Отдельно от балла, потому что низкий балл
+    # получается по двум совершенно разным причинам, и путать их опасно:
+    # «радар в окне есть и изменений не показывает» — повод усомниться
+    # в событии, «радарных снимков в окне нет» — повод усомниться только
+    # в собственной осведомлённости. Второе особенно важно не занижать:
+    # подтверждённость проседает от облачности, то есть ровно тогда,
+    # когда оптика слабее всего и смотреть надо больше, а не меньше.
+    radar_verdict: str = RADAR_NO_DATA
     parts: dict[str, int] = dataclass_field(default_factory=dict)
     notes: list[str] = dataclass_field(default_factory=list)
 
@@ -372,11 +386,14 @@ def corroborate(
         samples, window, events or [], start_date, end_date
     )
     if confirmation is not None:
+        radar_verdict = RADAR_AGREES
         parts["radar"] = WEIGHT_RADAR
         notes.append(confirmation)
     elif not window:
+        radar_verdict = RADAR_NO_DATA
         notes.append("радарных снимков в окне события нет")
     else:
+        radar_verdict = RADAR_SILENT
         notes.append("радар согласованного изменения не показывает")
 
     # --- погода ---
@@ -409,7 +426,13 @@ def corroborate(
             )
 
     score = max(0, min(100, sum(parts.values())))
-    return Corroboration(score=score, level=_level(score), parts=parts, notes=notes)
+    return Corroboration(
+        score=score,
+        level=_level(score),
+        radar_verdict=radar_verdict,
+        parts=parts,
+        notes=notes,
+    )
 
 
 def _level(score: int) -> str:

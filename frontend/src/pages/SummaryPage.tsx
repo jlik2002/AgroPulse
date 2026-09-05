@@ -21,6 +21,7 @@ import { Card, CardHeader } from "@/components/ui/Card";
 import { Chip } from "@/components/ui/Chip";
 import { EmptyState, ErrorState, Loading } from "@/components/ui/State";
 import { cn } from "@/lib/cn";
+import { corroborationOf, type CorroborationView } from "@/lib/corroboration";
 import {
   formatArea,
   formatDateRangeShort,
@@ -260,10 +261,12 @@ function PriorityCard({
 }) {
   const style = statusOf(row.status);
   const anomaly = row.worst_anomaly;
-  const quality = {
-    title: dataQualityTitle(row.mean_valid_fraction),
-    good: (row.mean_valid_fraction ?? 0) >= 0.8,
-  };
+  // Подтверждённость относится к самому событию, а прежняя строка про
+  // качество данных — к сезону целиком. Разница не косметическая: у поля
+  // может быть отличное среднее покрытие за сезон и при этом аномалия,
+  // целиком собранная из восстановленных точек под сплошным облаком.
+  // Ровно так экран и рекомендовал ехать смотреть облако.
+  const trust = corroborationOf(anomaly);
 
   const reason = anomaly
     ? `NDVI ниже нормы ${anomaly.duration_days} ${daysWord(anomaly.duration_days)} подряд`
@@ -321,25 +324,65 @@ function PriorityCard({
           {reason}
         </p>
         <div className="flex items-center gap-2.5">
-          {/* Иконка следует за подписью: зелёная галочка рядом со словом
-              «низкое» противоречила бы собственному тексту. */}
-          {quality.good ? (
-            <CircleCheck size={17} className="shrink-0 text-ok" />
+          {trust ? (
+            <TrustLine trust={trust} />
           ) : (
-            <CircleAlert size={17} className="shrink-0 text-warn" />
+            <>
+              {/* Иконка следует за подписью: зелёная галочка рядом со словом
+                  «низкое» противоречила бы собственному тексту. */}
+              {(row.mean_valid_fraction ?? 0) >= 0.8 ? (
+                <CircleCheck size={17} className="shrink-0 text-ok" />
+              ) : (
+                <CircleAlert size={17} className="shrink-0 text-warn" />
+              )}
+              <span className="text-[14px] text-ink-soft">
+                Качество данных: {dataQualityTitle(row.mean_valid_fraction)}
+                {row.mean_valid_fraction !== null
+                  ? ` · покрытие ${formatPercent(row.mean_valid_fraction)}`
+                  : ""}
+              </span>
+            </>
           )}
-          <span className="text-[14px] text-ink-soft">
-            Качество данных: {quality.title}
-            {row.mean_valid_fraction !== null
-              ? ` · покрытие ${formatPercent(row.mean_valid_fraction)}`
-              : ""}
-          </span>
           <Button size="sm" variant={row.inspection_rank === 1 ? "primary" : "ghost"} asChild className="ml-auto">
             <Link to={href}>Открыть поле</Link>
           </Button>
         </div>
+
+        {/* Порядок в очереди не меняется: обосновать ранжирование по
+            подтверждённости пока нечем. Но предупредить перед выездом
+            обязаны — поездка стоит дороже, чем перепроверка данных. */}
+        {trust?.disputed ? (
+          <p className="flex items-start gap-2.5 rounded-xl bg-danger-tint px-3.5 py-2.5 text-[13.5px] leading-relaxed text-ink">
+            <TriangleAlert size={16} className="mt-0.5 shrink-0 text-danger" />
+            Радар в эти дни изменений не показывает. Проверьте исходные данные,
+            прежде чем планировать выезд.
+          </p>
+        ) : null}
       </div>
     </div>
+  );
+}
+
+/** Строка подтверждённости в карточке очереди.
+ *
+ *  Без пояснения рядом не показывается принципиально: одна короткая оценка
+ *  без причины — это ещё один непонятный значок на экране, а не сигнал. */
+function TrustLine({ trust }: { trust: CorroborationView }) {
+  const icon = {
+    good: <CircleCheck size={17} className="shrink-0 text-ok" />,
+    warn: <CircleAlert size={17} className="shrink-0 text-warn" />,
+    danger: <TriangleAlert size={17} className="shrink-0 text-danger" />,
+    muted: <CircleHelp size={17} className="shrink-0 text-ink-muted" />,
+  }[trust.tone];
+
+  return (
+    <>
+      {icon}
+      <span className="min-w-0 text-[14px] text-ink-soft">
+        <span className="font-medium text-ink">{trust.title}</span>
+        {trust.detail ? `: ${trust.detail}` : ""}
+      </span>
+    </>
   );
 }
 

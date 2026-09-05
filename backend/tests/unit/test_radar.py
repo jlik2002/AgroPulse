@@ -252,6 +252,33 @@ def test_fragmented_orbits_lower_corroboration() -> None:
     assert _corroborate(samples=mixed).score < _corroborate(samples=same_orbit).score
 
 
+def test_radar_verdict_separates_silence_from_absence() -> None:
+    """Низкий балл получается по двум разным причинам, и путать их нельзя.
+
+    «Снимки в окне есть, изменений не видно» — повод усомниться в событии.
+    «Снимков в окне нет» — повод усомниться только в своей осведомлённости,
+    и понижать приоритет поля из-за этого нельзя: подтверждённость проседает
+    от облачности, то есть тогда, когда смотреть надо больше, а не меньше.
+    """
+    silent = [
+        RadarSample(date=date(2026, 7, 4), orbit_direction="descending",
+                    relative_orbit=43, vh_median_db=-18.0),
+        RadarSample(date=date(2026, 7, 16), orbit_direction="descending",
+                    relative_orbit=43, vh_median_db=-18.1),
+    ]
+    # Снимки есть, изменений нет.
+    assert _corroborate(samples=silent).radar_verdict == radar_module.RADAR_SILENT
+    # Снимков в окне нет вовсе.
+    assert _corroborate(samples=[]).radar_verdict == radar_module.RADAR_NO_DATA
+    # Радар подтверждает.
+    dropping = [
+        silent[0],
+        RadarSample(date=date(2026, 7, 16), orbit_direction="descending",
+                    relative_orbit=43, vh_median_db=-22.0),
+    ]
+    assert _corroborate(samples=dropping).radar_verdict == radar_module.RADAR_AGREES
+
+
 def test_score_never_leaves_its_range() -> None:
     """Оценка остаётся в 0..100 при любом наборе штрафов."""
     worst = _corroborate(

@@ -762,6 +762,7 @@ def _apply_corroboration(
 
     period.factors["corroboration"] = result.score
     period.factors["corroboration_level"] = result.level
+    period.factors["corroboration_radar"] = result.radar_verdict
     period.factors["corroboration_parts"] = result.parts
     period.factors["corroboration_notes"] = result.notes
 

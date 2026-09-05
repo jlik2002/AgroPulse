@@ -11,6 +11,7 @@ import { Link } from "react-router-dom";
 import type { FieldAnalysis } from "@/hooks/useFieldAnalysis";
 import { ChartLegend } from "@/components/charts/ChartLegend";
 import { NdviChart } from "@/components/charts/NdviChart";
+import { EvidencePanel } from "@/components/field/EvidencePanel";
 import { FieldStatePanel, LAYER_OPTIONS, type LayerMode } from "@/components/field/FieldStatePanel";
 import { InspectionChecklist } from "@/components/field/InspectionChecklist";
 import { Button } from "@/components/ui/Button";
@@ -18,6 +19,7 @@ import { Card, CardHeader } from "@/components/ui/Card";
 import { Chip } from "@/components/ui/Chip";
 import { Segmented } from "@/components/ui/Segmented";
 import { cn } from "@/lib/cn";
+import { corroborationOf } from "@/lib/corroboration";
 import {
   daysWord,
   formatDateRangeShort,
@@ -57,6 +59,10 @@ export function OverviewTab({ analysis, projectId, onOpenTab }: OverviewTabProps
     : null;
   const quality = dataQualityTitle(meanValid);
   const qualityGood = (meanValid ?? 0) >= 0.8;
+  // Качество данных относится к периоду целиком, подтверждённость — к самому
+  // событию. Когда событие есть, вопрос «можно ли ему верить» важнее, и он
+  // выносится в отдельный разбор ниже.
+  const trust = corroborationOf(worst);
 
   return (
     <div className="space-y-4">
@@ -146,6 +152,8 @@ export function OverviewTab({ analysis, projectId, onOpenTab }: OverviewTabProps
       </div>
 
       {/* --- доказательства --- */}
+      {trust ? <EvidencePanel trust={trust} /> : null}
+
       <div className="grid grid-cols-2 gap-4">
         <Card className="flex flex-col">
           <CardHeader
