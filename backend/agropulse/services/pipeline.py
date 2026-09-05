@@ -119,6 +119,9 @@ class AnalysisOutcome:
     forecast: ForecastResult
     assessment: RiskAssessment
     in_period: list[SeriesSample] = dataclass_field(default_factory=list)
+    # Коридор нормы по датам периода: (нижняя граница, верхняя). Из него
+    # интерфейс строит «ожидаемую динамику» — середину коридора.
+    norm_bands: dict[date, tuple[float, float]] = dataclass_field(default_factory=dict)
 
 
 class FieldPipeline:
@@ -371,6 +374,7 @@ class FieldPipeline:
             forecast=forecast,
             assessment=assessment,
             in_period=in_period,
+            norm_bands=_norm_bands(climatology, in_period),
         )
 
     def _restore_gaps(
@@ -543,7 +547,9 @@ class FieldPipeline:
                     outcome.restored_source,
                 ),
             )
-            uow.observations.set_zscores(context.field_id, outcome.zscores)
+            uow.observations.set_climatology(
+                context.field_id, outcome.zscores, outcome.norm_bands
+            )
             uow.anomalies.replace_for_field(
                 context.field_id,
                 [_to_anomaly(context.field_id, period) for period in outcome.periods],
@@ -698,6 +704,31 @@ def _to_anomaly(field_id: uuid.UUID, period: AnomalyPeriod) -> Anomaly:
         confidence=period.confidence,
         factors=period.factors,
     )
+
+
+def _norm_bands(
+    climatology: Climatology, in_period: list[SeriesSample]
+) -> dict[date, tuple[float, float]]:
+    """Коридор нормы на датах периода анализа.
+
+    Границы — медиана плюс-минус одно стандартное отклонение, то есть ровно
+    тот порог, начиная с которого отклонение считается угнетением (z = −1).
+    Благодаря этому линия коридора на графике и найденные аномалии не спорят
+    друг с другом.
+    """
+    bands: dict[date, tuple[float, float]] = {}
+    if not climatology.available:
+        return bands
+
+    for sample in in_period:
+        point = climatology.estimate(phase_of(sample.date))
+        if point is None:
+            continue
+        bands[sample.date] = (
+            round(point.mean - point.std, 6),
+            round(point.mean + point.std, 6),
+        )
+    return bands
 
 
 def _to_forecast_run(field_id: uuid.UUID, forecast: ForecastResult) -> ForecastRun:

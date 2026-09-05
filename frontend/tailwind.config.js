@@ -1,0 +1,88 @@
+/** Палитра снята пипеткой с макетов из AgroPulse_экраны_16x9 — менять её нельзя:
+ *  интерфейс должен совпадать с утверждённым дизайном. */
+export default {
+  content: ["./index.html", "./src/**/*.{ts,tsx}"],
+  theme: {
+    extend: {
+      colors: {
+        // Фирменный тёмно-зелёный: кнопки, бейджи полей, активные состояния.
+        brand: {
+          50: "#F1F5EA",
+          100: "#E4EEDF",
+          200: "#C8DCC2",
+          300: "#96BE99",
+          400: "#4F8A63",
+          500: "#1F6B45",
+          600: "#155C3B",
+          700: "#0F4730",
+          800: "#0F422E",
+          900: "#0D3A28",
+        },
+        ink: {
+          DEFAULT: "#0B0B0B",   // заголовки и основной текст
+          soft: "#3F4756",      // вторичный текст
+          muted: "#7B808F",     // подписи и подсказки
+          faint: "#9CA1AC",     // ожидаемая динамика, отключённые элементы
+        },
+        line: {
+          DEFAULT: "#E4E7EB",   // границы карточек
+          soft: "#EEF0F3",      // разделители внутри карточек
+          track: "#E5E6E9",     // дорожка прогресса
+        },
+        canvas: "#FEFEFE",
+        // Статусы полей. Цвет — только дополнительный сигнал, рядом всегда текст.
+        danger: {
+          DEFAULT: "#E5252C",
+          soft: "#FEE6E6",
+          line: "#F3B7B9",
+          ink: "#C0272E",
+          tint: "#FEF0F2",      // заливка зоны аномалии на графиках
+        },
+        warn: {
+          DEFAULT: "#E07B00",
+          soft: "#FEF3E2",
+          line: "#F5D9AE",
+          ink: "#C26815",
+        },
+        ok: {
+          DEFAULT: "#15803D",
+          soft: "#EDF6EE",
+          line: "#C6E1CB",
+          ink: "#15603C",
+        },
+        // Ряды на графиках. Тип значения различается визуально — это
+        // продуктовый принцип, а не оформление.
+        series: {
+          observed: "#0F4730",
+          restored: "#2A74DD",
+          forecast: "#7B49BF",
+          expected: "#9CA1AC",
+          ndmi: "#0FA3A0",
+          temp: "#FB541C",
+          precip: "#1674E2",
+        },
+      },
+      fontFamily: {
+        sans: ["Inter Variable", "Inter", "system-ui", "-apple-system", "Segoe UI", "Roboto", "sans-serif"],
+      },
+      borderRadius: { xl: "0.75rem", "2xl": "1rem" },
+      boxShadow: {
+        card: "0 1px 2px rgba(16, 24, 40, 0.04)",
+        pop: "0 12px 32px rgba(16, 24, 40, 0.12)",
+        modal: "0 24px 64px rgba(16, 24, 40, 0.20)",
+      },
+      keyframes: {
+        "fade-in": { from: { opacity: "0" }, to: { opacity: "1" } },
+        "slide-up": {
+          from: { opacity: "0", transform: "translateY(8px)" },
+          to: { opacity: "1", transform: "translateY(0)" },
+        },
+      },
+      animation: {
+        "fade-in": "fade-in 140ms ease-out",
+        "slide-up": "slide-up 160ms ease-out",
+      },
+    },
+  },
+  plugins: [],
+};

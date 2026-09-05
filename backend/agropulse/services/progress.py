@@ -141,6 +141,11 @@ class StageTracker:
         self._field_id = field_id
         self._stage = stage
         self._task_id = task_id
+        # Последнее сообщение стадии переносится в отметку о завершении.
+        # Иначе в списке стадий у готового поля оставались пустые подписи:
+        # запись со статусом DONE затирала текст, ради которого стадия и
+        # сообщала о себе («найдено 24 сцены», «18 снимков пригодны»).
+        self._last_message: str | None = None
 
     def __enter__(self) -> StageTracker:
         report(
@@ -154,6 +159,7 @@ class StageTracker:
         return self
 
     def message(self, text: str, progress: float = 0.5) -> None:
+        self._last_message = text
         report(
             self._project_id,
             self._field_id,
@@ -177,6 +183,7 @@ class StageTracker:
                 self._stage,
                 JobStatus.DONE,
                 1.0,
+                self._last_message,
                 task_id=self._task_id,
             )
         else:

@@ -31,11 +31,18 @@ PDF_MEDIA_TYPE = "application/pdf"
 BOM = "﻿"
 
 
+def _sections_key(sections: set[str]) -> str:
+    """Устойчивое имя набора разделов для ключа в объектном хранилище."""
+    return "-".join(sorted(sections)) or "default"
+
+
 @dataclass(slots=True)
 class ReportDocument:
     filename: str
     content: str | bytes
     media_type: str
+    # Число страниц знает только вёрстка PDF; для CSV остаётся None.
+    pages: int | None = None
 
 
 class ReportService:
@@ -66,25 +73,35 @@ class ReportService:
     # PDF
     # ------------------------------------------------------------------
 
-    def field_pdf(self, field_id: uuid.UUID, client: str | None = None) -> ReportDocument:
+    def field_pdf(
+        self,
+        field_id: uuid.UUID,
+        client: str | None = None,
+        sections: str | None = None,
+    ) -> ReportDocument:
         data = self._load_field(field_id)
-        document = pdf.build_field_report(data, client)
-        self._store(f"reports/field/{field_id}.pdf", document)
+        chosen = pdf.resolve_sections(sections)
+        document = pdf.build_field_report(data, client, chosen)
+        # Ключ включает состав разделов: два отчёта по одному полю с разным
+        # набором разделов — разные документы, и затирать один другим нельзя.
+        self._store(f"reports/field/{field_id}-{_sections_key(chosen)}.pdf", document.content)
         return ReportDocument(
             filename=f"{data.field.name}.pdf",
-            content=document,
+            content=document.content,
             media_type=PDF_MEDIA_TYPE,
+            pages=document.pages,
         )
 
     def project_pdf(self, project_id: uuid.UUID, client: str | None = None) -> ReportDocument:
         data = self._load_project(project_id)
         document = pdf.build_project_report(data, client)
-        self._store(f"reports/project/{project_id}.pdf", document)
+        self._store(f"reports/project/{project_id}.pdf", document.content)
         stamp = datetime.now().strftime("%Y-%m-%d")
         return ReportDocument(
             filename=f"Сводный отчёт {stamp}.pdf",
-            content=document,
+            content=document.content,
             media_type=PDF_MEDIA_TYPE,
+            pages=document.pages,
         )
 
     # ------------------------------------------------------------------

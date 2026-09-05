@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -58,6 +59,39 @@ RISK_LEVEL_TITLES = {
 
 SATELLITE_COLLECTION = "COPERNICUS/S2_SR_HARMONIZED"
 
+VALUE_TYPE_TITLES = {
+    "observed": "Наблюдаемое",
+    "restored": "Восстановленное",
+    "forecast": "Прогноз",
+}
+
+# Разделы отчёта, которыми управляет пользователь на экране настройки.
+# Порядок задаёт и порядок страниц, и список в предпросмотре.
+FIELD_SECTIONS: tuple[str, ...] = (
+    "summary",
+    "state",
+    "dynamics",
+    "anomalies",
+    "forecast",
+    "quality",
+    "table",
+)
+
+
+def resolve_sections(requested: str | None) -> set[str]:
+    """Разобрать список разделов из запроса.
+
+    Пустой или неизвестный набор означает «всё, кроме полной таблицы»:
+    таблица на сотню строк раздувает отчёт и нужна не всегда, поэтому
+    по умолчанию её нет — как и на экране настройки.
+    """
+    if not requested:
+        return set(FIELD_SECTIONS) - {"table"}
+
+    chosen = {item.strip() for item in requested.split(",") if item.strip()}
+    known = chosen & set(FIELD_SECTIONS)
+    return known or (set(FIELD_SECTIONS) - {"table"})
+
 _environment = Environment(
     loader=FileSystemLoader(TEMPLATES_DIR),
     autoescape=select_autoescape(["html"]),
@@ -68,10 +102,24 @@ def _css() -> str:
     return (TEMPLATES_DIR / "base.css").read_text(encoding="utf-8")
 
 
-def _render_pdf(html: str) -> bytes:
+@dataclass(slots=True)
+class RenderedReport:
+    """Готовый документ вместе с числом страниц.
+
+    Количество страниц знает только вёрстка, и узнать его после сборки байтов
+    уже нельзя. Интерфейс показывает его на карточке готового файла, поэтому
+    считаем здесь, а не гадаем по размеру.
+    """
+
+    content: bytes
+    pages: int
+
+
+def _render_pdf(html: str) -> RenderedReport:
     from weasyprint import HTML
 
-    return HTML(string=html).write_pdf()
+    document = HTML(string=html).render()
+    return RenderedReport(content=document.write_pdf(), pages=len(document.pages))
 
 
 def _round(value: float | None, digits: int = 2) -> float | None:
@@ -83,8 +131,16 @@ def _round(value: float | None, digits: int = 2) -> float | None:
 # ----------------------------------------------------------------------
 
 
-def build_field_report(data: FieldData, client: str | None = None) -> bytes:
-    """Аналитический отчёт по одному полю."""
+def build_field_report(
+    data: FieldData, client: str | None = None, sections: set[str] | None = None
+) -> RenderedReport:
+    """Аналитический отчёт по одному полю.
+
+    `sections` — набор разделов, выбранный пользователем. Данные читаются
+    одинаково независимо от выбора: разница только в том, что попадёт
+    в вёрстку, а расчёт всё равно уже выполнен.
+    """
+    sections = sections or resolve_sections(None)
     field = data.field
     observations = data.observations
     anomalies = data.anomalies
@@ -204,9 +260,42 @@ def build_field_report(data: FieldData, client: str | None = None) -> bytes:
             else None
         ),
         risk_explanation=breakdown.get("explanation") or [],
+        sections=sections,
+        rows=_table_rows(observations) if "table" in sections else [],
         methodology={"collection": SATELLITE_COLLECTION},
     )
     return _render_pdf(html)
+
+
+def _table_rows(observations: list) -> list[dict]:
+    """Строки полной таблицы значений.
+
+    Для отсутствующего покрытия подставляется причина, а не прочерк:
+    пользователь должен видеть, почему значения нет.
+    """
+    rows = []
+    for observation in observations:
+        if observation.valid_fraction is not None:
+            coverage = f"{observation.valid_fraction * 100:.0f}%"
+        elif observation.value_type.value == "forecast":
+            coverage = "будущая дата"
+        else:
+            coverage = observation.missing_reason or "снимок отсутствует"
+
+        rows.append(
+            {
+                "date": observation.date.isoformat(),
+                "value_type": VALUE_TYPE_TITLES.get(
+                    observation.value_type.value, observation.value_type.value
+                ),
+                "ndvi": _round(observation.ndvi_mean),
+                "ndmi": _round(observation.ndmi_mean),
+                "temperature": _round(observation.temperature, 1),
+                "precipitation": _round(observation.precipitation, 1),
+                "coverage": coverage,
+            }
+        )
+    return rows
 
 
 def _field_payload(
@@ -300,7 +389,7 @@ def _parse_checklist(result: narrative.Narrative | None) -> list[str]:
 # ----------------------------------------------------------------------
 
 
-def build_project_report(data: ProjectData, client: str | None = None) -> bytes:
+def build_project_report(data: ProjectData, client: str | None = None) -> RenderedReport:
     """Сводный отчёт по хозяйству с очередью на осмотр."""
     rows, cards = [], []
     for field_data in data.fields:

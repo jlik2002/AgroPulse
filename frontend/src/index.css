@@ -1,0 +1,105 @@
+@import "@fontsource-variable/inter";
+@import "leaflet/dist/leaflet.css";
+@import "@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply bg-canvas font-sans text-[14px] text-ink antialiased;
+    font-feature-settings: "cv05" 1, "ss03" 1;
+  }
+
+  /* Цифры в таблицах и на карточках риска должны стоять столбиком. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+
+  :focus-visible {
+    @apply outline-none ring-2 ring-brand-700/40 ring-offset-2 ring-offset-white;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-line bg-white shadow-card;
+  }
+
+  .card-pad {
+    @apply p-5;
+  }
+
+  /* Полосатый скроллбар макета: тонкий, без стрелок. */
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-color: #d3d7dd transparent;
+  }
+
+  .scroll-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .scroll-thin::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-[#D3D7DD];
+  }
+}
+
+/* --- Leaflet: подгоняем управление под стиль макета --- */
+.leaflet-container {
+  @apply font-sans;
+  background: #e8eaed;
+}
+
+.leaflet-control-attribution {
+  @apply rounded-tl-lg border-none bg-white/80 px-2 text-[10px] text-ink-muted;
+}
+
+.leaflet-control-attribution a {
+  @apply text-ink-muted;
+}
+
+/* Стандартные кнопки зума скрыты — вместо них собственный блок,
+   как на макете «Выбор полей на карте». */
+.leaflet-control-zoom {
+  display: none;
+}
+
+.leaflet-pane .leaflet-pm-draggable {
+  cursor: grab;
+}
+
+/* Масштабная линейка: белая карточка со скруглением, как на макете. */
+.leaflet-control-scale {
+  @apply mb-4 ml-4;
+}
+
+.leaflet-control-scale-line {
+  @apply rounded-lg border-2 border-t-0 border-ink/70 bg-white/95 px-3 py-1.5 text-[13px] font-medium text-ink shadow-card;
+  line-height: 1.2;
+}
+
+.leaflet-control-scale-line:not(:first-child) {
+  display: none;
+}
+
+/* Контур поля, который сейчас рисуют: пунктир с точками вершин. */
+.leaflet-pm-draw .leaflet-pm-vertexmarker {
+  @apply border-brand-800;
+}
+
+/* Подпись контура на карте. */
+.agro-tooltip {
+  @apply rounded-lg border-none bg-white px-2.5 py-1 text-[12.5px] font-medium text-ink shadow-card;
+}
+
+.agro-tooltip::before {
+  display: none;
+}

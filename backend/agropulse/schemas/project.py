@@ -22,6 +22,19 @@ class ProjectCreate(BaseModel):
         return self
 
 
+class ProjectUpdate(BaseModel):
+    """Правка проекта до запуска анализа: название и период.
+
+    Все поля необязательны — приходит только то, что пользователь изменил.
+    Проверка периода живёт в сервисе: здесь неизвестны текущие значения,
+    и частичное обновление проверить нечем.
+    """
+
+    name: str | None = Field(default=None, max_length=200)
+    period_from: date | None = None
+    period_to: date | None = None
+
+
 class ProjectRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

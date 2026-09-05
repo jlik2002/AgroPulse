@@ -115,21 +115,51 @@ class ObservationRepository:
     def delete_for_field(self, field_id: uuid.UUID) -> None:
         self._session.execute(delete(Observation).where(Observation.field_id == field_id))
 
-    def set_zscores(self, field_id: uuid.UUID, zscores: dict[date, float]) -> None:
-        """Проставить отклонение от нормы по датам.
+    def set_climatology(
+        self,
+        field_id: uuid.UUID,
+        zscores: dict[date, float],
+        bands: dict[date, tuple[float, float]],
+    ) -> None:
+        """Проставить отклонение от нормы и сам коридор нормы по датам.
 
-        Даты, для которых z-score не рассчитан, обнуляются: прежнее значение
+        Даты, для которых норма не построена, обнуляются: прежнее значение
         относилось бы к предыдущей норме и вводило бы в заблуждение.
 
-        Обновление уходит одним пакетом по первичным ключам, а не запросом
-        на дату: ряд поля за несколько сезонов — это сотни строк.
+        Прогнозные строки обновляются только по z-score: их `ndvi_lo`/`ndvi_hi` —
+        это доверительный интервал предсказания, а не коридор нормы, и затирать
+        его климатологией нельзя.
+
+        Обновление уходит пакетами по первичным ключам, а не запросом на дату:
+        ряд поля за несколько сезонов — это сотни строк.
         """
         rows = self._session.execute(
-            select(Observation.id, Observation.date).where(Observation.field_id == field_id)
+            select(Observation.id, Observation.date, Observation.value_type).where(
+                Observation.field_id == field_id
+            )
         ).all()
         if not rows:
             return
-        self._session.execute(
-            update(Observation),
-            [{"id": row.id, "ndvi_zscore": zscores.get(row.date)} for row in rows],
-        )
+
+        historical: list[dict] = []
+        forecast: list[dict] = []
+        for row in rows:
+            if row.value_type == ValueType.FORECAST:
+                forecast.append({"id": row.id, "ndvi_zscore": zscores.get(row.date)})
+                continue
+            band = bands.get(row.date)
+            historical.append(
+                {
+                    "id": row.id,
+                    "ndvi_zscore": zscores.get(row.date),
+                    "ndvi_lo": band[0] if band else None,
+                    "ndvi_hi": band[1] if band else None,
+                }
+            )
+
+        # Два вызова, а не один: у наборов разный состав колонок, и общий
+        # bulk-update пришлось бы кормить лишними полями прогнозных строк.
+        if historical:
+            self._session.execute(update(Observation), historical)
+        if forecast:
+            self._session.execute(update(Observation), forecast)

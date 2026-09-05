@@ -229,3 +229,9 @@ data/*
 !data/.gitkeep
 !data/README.md
 !data/demo/
+
+# --- Фронтенд ---
+node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+frontend/.vite/

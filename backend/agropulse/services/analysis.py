@@ -13,7 +13,14 @@ from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import date
 
-from agropulse.db.models import Anomaly, Field, FieldStatus, Observation, ValueType
+from agropulse.db.models import (
+    Anomaly,
+    Field,
+    FieldStatus,
+    ForecastRun,
+    Observation,
+    ValueType,
+)
 from agropulse.db.uow import UnitOfWork
 from agropulse.errors import FieldNotFoundError, ProjectNotFoundError
 
@@ -83,6 +90,15 @@ class AnalysisService:
             insufficient_reason=breakdown.get("insufficient_reason"),
             climatology=breakdown.get("climatology"),
         )
+
+    def forecast(self, field_id: uuid.UUID) -> ForecastRun | None:
+        """Метаданные последнего прогноза поля.
+
+        Отсутствие прогона — штатный ответ, а не ошибка: поле могло ещё не
+        обрабатываться или данных не хватило на построение прогноза.
+        """
+        self._require_field(field_id)
+        return self._uow.forecasts.get_for_field(field_id)
 
     def project_summary(self, project_id: uuid.UUID) -> ProjectSummaryView:
         """Сводка по проекту с очередью на осмотр.

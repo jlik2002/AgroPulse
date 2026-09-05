@@ -79,6 +79,13 @@ class InvalidBoundingBoxError(ValidationError):
     message = "некорректные границы прямоугольника"
 
 
+class InvalidPeriodError(ValidationError):
+    """Период анализа короче двух недель: ряд был бы непоказательным."""
+
+    code = "invalid_period"
+    message = "период короче 14 дней: временной ряд будет непоказательным"
+
+
 class EmptyProjectError(AppError):
     code = "project_has_no_fields"
     http_status = 400

@@ -181,6 +181,79 @@ def test_analyze_writes_results_and_marks_status(
     assert field.status.value != "pending"
 
 
+def test_analyze_keeps_forecast_interval_intact(
+    pipeline, satellite_series, created_field, db_session
+) -> None:
+    """У прогнозных точек `ndvi_lo`/`ndvi_hi` — доверительный интервал модели.
+
+    Запись климатологии проходит по тем же колонкам исторических точек,
+    поэтому важно, что прогноз она не задевает.
+    """
+    from agropulse.db.models import Observation, ValueType
+
+    field_id = _field_id(created_field)
+    pipeline.collect(field_id)
+    pipeline.analyze(field_id)
+
+    forecast = (
+        db_session.query(Observation)
+        .filter_by(field_id=field_id, value_type=ValueType.FORECAST)
+        .all()
+    )
+    assert forecast
+    for observation in forecast:
+        assert observation.ndvi_lo is not None
+        assert observation.ndvi_hi is not None
+        assert observation.ndvi_lo < observation.ndvi_hi
+        # z-score считается только по периоду анализа, будущее в него не входит.
+        assert observation.ndvi_zscore is None
+
+
+def test_norm_band_is_median_plus_minus_one_sigma() -> None:
+    """Коридор нормы совпадает с порогом угнетения z = −1.
+
+    Иначе линия «ожидаемой динамики» на графике и найденные аномалии
+    противоречили бы друг другу.
+    """
+    from agropulse.analytics.anomalies import SeriesSample
+    from agropulse.analytics.climatology import Climatology, ClimatologyPoint, phase_of
+    from agropulse.db.models import ValueType
+    from agropulse.services.pipeline import _norm_bands
+
+    day = date(2024, 6, 1)
+    climatology = Climatology(
+        by_phase={phase_of(day): ClimatologyPoint(mean=0.60, std=0.05, samples=9)},
+        phase_kind="day_of_year",
+        sowing_known=False,
+        seasons_used=3,
+        samples_total=9,
+        available=True,
+    )
+    samples = [SeriesSample(date=day, ndvi=0.5, value_type=ValueType.OBSERVED)]
+
+    bands = _norm_bands(climatology, samples)
+
+    assert bands[day] == (0.55, 0.65)
+
+
+def test_norm_band_is_empty_without_climatology() -> None:
+    """Нормы нет — коридор не выдумывается."""
+    from agropulse.analytics.climatology import Climatology
+    from agropulse.services.pipeline import _norm_bands
+
+    climatology = Climatology(
+        by_phase={},
+        phase_kind="day_of_year",
+        sowing_known=False,
+        seasons_used=0,
+        samples_total=0,
+        available=False,
+        reason="недостаточно собственной истории поля",
+    )
+
+    assert _norm_bands(climatology, []) == {}
+
+
 def test_analyze_is_idempotent(
     pipeline, satellite_series, created_field, db_session
 ) -> None:

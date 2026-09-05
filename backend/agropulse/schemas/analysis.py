@@ -1,7 +1,7 @@
 """Схемы результатов анализа: аномалии, риск, сводка по проекту."""
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict
 
@@ -41,6 +41,33 @@ class RiskRead(BaseModel):
     confidence: float | None
     insufficient_reason: str | None
     climatology: dict | None
+
+
+class ForecastRead(BaseModel):
+    """Метаданные прогноза. Сами точки ряда приходят вместе с временным рядом.
+
+    Отдаётся отдельно от `RiskRead`: риск описывает текущее состояние поля,
+    а прогноз — будущее, и на экране это разные блоки с разной осторожностью
+    формулировок.
+    """
+
+    # protected_namespaces отключён осознанно: поле называется `model_version`,
+    # потому что так его называет контракт с сервисом моделей, а pydantic
+    # по умолчанию считает префикс `model_` своим и предупреждает об этом.
+    model_config = ConfigDict(from_attributes=True, protected_namespaces=())
+
+    field_id: uuid.UUID
+    horizon_days: int
+    model_version: str | None
+    # declining / improving / stable
+    direction: str | None
+    # high / moderate / low
+    risk_level: str | None
+    confidence: float | None
+    # Заполняется, когда данных не хватило: интерфейс обязан сказать об этом прямо.
+    insufficient_reason: str | None
+    factors: dict | None
+    created_at: datetime | None
 
 
 class FieldSummary(BaseModel):

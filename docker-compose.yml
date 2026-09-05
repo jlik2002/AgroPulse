@@ -141,6 +141,24 @@ services:
         condition: service_healthy
     stop_grace_period: 60s
 
+  # SPA за nginx. Тот же образ уезжает в Kubernetes: адрес API нигде
+  # не зашит в сборку — путь /api проксирует сам nginx.
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "5173:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/healthz"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
 volumes:
   postgres-data:
   redis-data:

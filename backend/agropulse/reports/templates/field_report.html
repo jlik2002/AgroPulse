@@ -15,6 +15,7 @@
   </div>
 </div>
 
+{% if "state" in sections %}
 <h2>Состояние поля</h2>
 <p>
   <span class="status status-{{ status }}">{{ status_title }}</span>
@@ -24,16 +25,21 @@
   {% endif %}
 </p>
 
+{% if insufficient_reason %}
+  <div class="note warning">Оценка риска не выполнена: {{ insufficient_reason }}</div>
+{% endif %}
+{% endif %}
+
+{% if "summary" in sections %}
+<h2>Краткий вывод</h2>
 {% if summary_text %}
   <p>{{ summary_text }}</p>
 {% elif summary_skipped %}
   <div class="note muted">Текстовое резюме не сформировано: {{ summary_skipped }}</div>
 {% endif %}
-
-{% if insufficient_reason %}
-  <div class="note warning">Оценка риска не выполнена: {{ insufficient_reason }}</div>
 {% endif %}
 
+{% if "dynamics" in sections %}
 <h2>Динамика вегетационного индекса</h2>
 <div class="chart">{{ ndvi_chart|safe }}</div>
 <p class="muted">
@@ -41,7 +47,9 @@
   восстановленные моделью. Точечная линия справа — прогноз с доверительным
   интервалом. Красной заливкой отмечены аномальные периоды.
 </p>
+{% endif %}
 
+{% if "quality" in sections %}
 <h2>Качество исходных данных</h2>
 <table>
   <tr><th>Показатель</th><th>Значение</th></tr>
@@ -59,7 +67,9 @@
 <h2>Погодный контекст</h2>
 <div class="chart">{{ weather_chart|safe }}</div>
 {% endif %}
+{% endif %}
 
+{% if "anomalies" in sections %}
 <div class="page-break"></div>
 
 <h2>Негативные аномальные периоды</h2>
@@ -94,7 +104,9 @@
 <h2>Что проверить при выезде</h2>
 <ul>{% for item in checklist %}<li>{{ item }}</li>{% endfor %}</ul>
 {% endif %}
+{% endif %}
 
+{% if "forecast" in sections %}
 <h2>Прогноз на {{ forecast.horizon_days }} суток</h2>
 {% if forecast.points %}
   <table>
@@ -107,13 +119,37 @@
 {% else %}
   <p>Прогноз не сформирован: {{ forecast.insufficient_reason }}</p>
 {% endif %}
+{% endif %}
 
-{% if risk_chart %}
+{% if "state" in sections and risk_chart %}
 <h2>Из чего сложилась оценка риска</h2>
 <div class="chart">{{ risk_chart|safe }}</div>
 {% if risk_explanation %}
   <ul>{% for item in risk_explanation %}<li>{{ item }}</li>{% endfor %}</ul>
 {% endif %}
+{% endif %}
+
+{% if "table" in sections %}
+<div class="page-break"></div>
+
+<h2>Полная таблица значений</h2>
+<table>
+  <tr>
+    <th>Дата</th><th>Тип значения</th><th class="num">NDVI</th><th class="num">NDMI</th>
+    <th class="num">Температура</th><th class="num">Осадки</th><th class="num">Покрытие</th>
+  </tr>
+  {% for row in rows %}
+  <tr>
+    <td>{{ row.date }}</td>
+    <td>{{ row.value_type }}</td>
+    <td class="num">{{ row.ndvi }}</td>
+    <td class="num">{{ row.ndmi }}</td>
+    <td class="num">{{ row.temperature }}</td>
+    <td class="num">{{ row.precipitation }}</td>
+    <td class="num">{{ row.coverage }}</td>
+  </tr>
+  {% endfor %}
+</table>
 {% endif %}
 
 <h2>Методика, источники и ограничения</h2>
