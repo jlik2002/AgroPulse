@@ -29,6 +29,10 @@ dependencies = [
     "pandas~=2.2.3",
     "scipy~=1.14.1",
 
+    # --- модель восстановления пропусков (V6) ---
+    "catboost~=1.2.10",              # сама модель; обучение в сервисе не запускается
+    "scikit-learn~=1.5",             # Ridge в межполевых признаках V6
+
     # --- внешние источники ---
     "earthengine-api~=1.1.2",        # основной источник Sentinel-2
     "rasterio~=1.4.1",               # чтение COG для резервного источника STAC
@@ -61,6 +65,11 @@ build-backend = "setuptools.build_meta"
 where = ["backend"]
 include = ["agropulse*"]
 
+[tool.setuptools.package-data]
+# Обученная модель V6 лежит рядом с кодом и обязана попадать в пакет:
+# без неё восстановление пропусков не работает, а обучать в сервисе нечем.
+"agropulse.ml.v6" = ["artifacts/*.cbm"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
@@ -72,6 +81,12 @@ select = ["E", "F", "I", "UP", "B"]
 # Начальная миграция сгенерирована Alembic. Переносить в ней строки вручную
 # бессмысленно: следующий autogenerate вернёт исходное форматирование.
 "**/migrations/versions/c9bd6d23f610_initial_schema.py" = ["E501"]
+# Код модели V6 перенесён из архива экспериментов и намеренно не приводится
+# к стилю проекта: любое расхождение с архивом делает результат
+# невоспроизводимым. Подробности — backend/agropulse/ml/v6/README.md.
+"backend/agropulse/ml/v6/ndvi_v3.py" = ["ALL"]
+"backend/agropulse/ml/v6/ndvi_v5.py" = ["ALL"]
+"backend/agropulse/ml/v6/scene_features.py" = ["ALL"]
 
 [tool.pytest.ini_options]
 pythonpath = ["backend"]

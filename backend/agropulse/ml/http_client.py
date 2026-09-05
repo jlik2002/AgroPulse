@@ -73,8 +73,14 @@ class HttpMLClient:
     # ------------------------------------------------------------------
 
     def impute(self, request: ImputeRequest) -> ImputeResult:
+        return self.impute_batch([request])[0]
+
+    def impute_batch(self, requests: list[ImputeRequest]) -> list[ImputeResult]:
+        """Один запрос на все ряды: контракт принимает массив `series`."""
+        if not requests:
+            return []
         body = {
-            "request_id": request.polygon_id,
+            "request_id": requests[0].polygon_id,
             "series": [
                 {
                     "polygon_id": request.polygon_id,
@@ -89,24 +95,38 @@ class HttpMLClient:
                     ],
                     "targets": [day.isoformat() for day in request.targets],
                 }
+                for request in requests
             ],
         }
         payload = self._request("POST", "/v1/impute", body)
+        version = payload.get("model_version", "unknown")
 
-        predictions = [
-            Prediction(
-                date=date.fromisoformat(item["date"]),
-                value=float(item["primary_ndvi_pred"]),
-                confidence=item.get("confidence"),
+        # Ответ приходит одним списком на все ряды, поэтому раскладывается
+        # обратно по полигонам. Строку без `polygon_id` отнести не к чему:
+        # при единственном ряде она принадлежит ему, иначе пропускается.
+        single = requests[0].polygon_id if len(requests) == 1 else None
+        by_polygon: dict[str, list[Prediction]] = {request.polygon_id: [] for request in requests}
+        for item in payload.get("predictions", []):
+            if item.get("primary_ndvi_pred") is None:
+                continue
+            polygon = item.get("polygon_id", single)
+            if polygon not in by_polygon:
+                continue
+            by_polygon[polygon].append(
+                Prediction(
+                    date=date.fromisoformat(item["date"]),
+                    value=float(item["primary_ndvi_pred"]),
+                    confidence=item.get("confidence"),
+                )
             )
-            for item in payload.get("predictions", [])
-            if item.get("primary_ndvi_pred") is not None
+        return [
+            ImputeResult(
+                predictions=by_polygon[request.polygon_id],
+                model_version=version,
+                source=self.name,
+            )
+            for request in requests
         ]
-        return ImputeResult(
-            predictions=predictions,
-            model_version=payload.get("model_version", "unknown"),
-            source=self.name,
-        )
 
     def forecast(self, request: ForecastRequest) -> ForecastResult:
         body = {

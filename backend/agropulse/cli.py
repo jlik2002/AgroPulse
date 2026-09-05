@@ -124,22 +124,32 @@ def predict(input_path: Path, output_path: Path) -> int:
         len(by_polygon), len(targets), client.name,
     )
 
-    predictions: dict[tuple[str, date], float] = {}
-    for polygon, rows in by_polygon.items():
-        wanted = targets_by_polygon.get(polygon)
-        if not wanted:
-            continue
-        result = client.impute(
-            ImputeRequest(
-                polygon_id=polygon,
-                observations=[
-                    SeriesPoint(date=row["date"], primary_ndvi=row["ndvi"]) for row in rows
-                ],
-                targets=sorted(wanted),
-            )
+    # Все ряды уходят одним вызовом, а не по одному в цикле. Часть признаков
+    # модели — межполевые: значение соседнего поля в ту же дату, общий для
+    # съёмки эффект дня. Поле, посчитанное в одиночку, увидит их пустыми.
+    requests = [
+        ImputeRequest(
+            polygon_id=polygon,
+            observations=[
+                SeriesPoint(
+                    date=row["date"],
+                    primary_ndvi=row["ndvi"],
+                    features=_row_features(row["row"]),
+                )
+                for row in rows
+            ],
+            targets=sorted(targets_by_polygon[polygon]),
+            crop_type=_crop_type(rows),
         )
+        for polygon, rows in by_polygon.items()
+        if targets_by_polygon.get(polygon)
+    ]
+    results = client.impute_batch(requests)
+
+    predictions: dict[tuple[str, date], float] = {}
+    for request, result in zip(requests, results, strict=True):
         for item in result.predictions:
-            predictions[(polygon, item.date)] = item.value
+            predictions[(request.polygon_id, item.date)] = item.value
 
     # Пропуски в submission не допускаются: на каждую контрольную точку должна
     # быть строка. Там, где модель отказалась предсказывать, подставляем
@@ -155,6 +165,38 @@ def predict(input_path: Path, output_path: Path) -> int:
 
     logger.info("Записано %s строк в %s", len(targets), output_path)
     return len(targets)
+
+
+# Ключевые колонки задаются отдельными полями запроса. Остальное — признаки
+# наблюдения: показания приборов, индексы, погода. Модель разбирает их сама
+# по именам, поэтому список признаков здесь не фиксируется: входной набор
+# задаёт постановка задачи, и лишняя колонка безопаснее недостающей.
+_KEY_COLUMNS = frozenset({COLUMN_POLYGON, COLUMN_DATE, COLUMN_TARGET, COLUMN_FLAG, "crop_type"})
+
+# Колонки, которых в тестовом наборе нет и которые содержат ответ либо
+# посчитаны по целевому году. Если они всё же пришли — в модель не отдаются.
+_FORBIDDEN_COLUMNS = frozenset({"ndvi_zscore", "status"})
+
+
+def _row_features(row: dict[str, str | None]) -> dict[str, float | None]:
+    """Числовые признаки строки в том виде, в каком их ждёт модель."""
+    return {
+        name: _to_float(value)
+        for name, value in row.items()
+        if name
+        and name not in _KEY_COLUMNS
+        and name not in _FORBIDDEN_COLUMNS
+        and not name.startswith("ndvi_climatology")
+    }
+
+
+def _crop_type(rows: list[dict]) -> str | None:
+    """Культура поля. Статична на весь ряд, поэтому берётся первая непустая."""
+    for row in rows:
+        value = (row["row"].get("crop_type") or "").strip()
+        if value:
+            return value
+    return None
 
 
 def _fill_missing(
