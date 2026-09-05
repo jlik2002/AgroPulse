@@ -7,15 +7,19 @@
 
 Это прямая реализация требования устойчивости: отказ одного источника
 деградирует результат, но не останавливает обработку поля.
+
+Отказ источника и отсутствие данных за период разделены. Разница нужна
+задаче: отказ имеет смысл повторить позже, а пустой период не изменится,
+сколько задачу ни перезапускай.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field as dataclass_field
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import date
-from typing import TypeVar
 
 from agropulse.providers.base import (
     ProviderError,
@@ -27,7 +31,7 @@ from agropulse.providers.weather_openmeteo import OpenMeteoWeatherProvider
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T")
+EMPTY_PERIOD_MESSAGE = "данных нет за запрошенный период"
 
 
 @dataclass(slots=True)
@@ -36,14 +40,33 @@ class SourceResult[T]:
 
     items: list[T] = dataclass_field(default_factory=list)
     source: str | None = None
-    errors: list[str] = dataclass_field(default_factory=list)
+    # Источники, ответившие ошибкой: не сконфигурированы, недоступны, упали.
+    failures: list[str] = dataclass_field(default_factory=list)
+    # Источники, ответившие штатно, но не имеющие данных за период.
+    empty_sources: list[str] = dataclass_field(default_factory=list)
 
     @property
     def ok(self) -> bool:
         return self.source is not None
 
+    @property
+    def is_permanently_empty(self) -> bool:
+        """Все источники ответили, и ни у одного нет данных за период.
 
-def _try_providers(
+        Повторять задачу в этом случае бессмысленно: за прошедший период
+        снимки не появятся.
+        """
+        return not self.ok and bool(self.empty_sources) and not self.failures
+
+    @property
+    def errors(self) -> list[str]:
+        """История попыток для отчёта о качестве данных."""
+        return self.failures + [
+            f"{name}: {EMPTY_PERIOD_MESSAGE}" for name in self.empty_sources
+        ]
+
+
+def _try_providers[T](
     providers: Sequence, call: Callable[[object], list[T]], what: str
 ) -> SourceResult[T]:
     result: SourceResult[T] = SourceResult()
@@ -51,20 +74,27 @@ def _try_providers(
     for provider in providers:
         try:
             if not provider.is_available():
-                result.errors.append(f"{provider.name}: не сконфигурирован")
+                result.failures.append(f"{provider.name}: не сконфигурирован")
                 continue
             items = call(provider)
         except ProviderError as exc:
-            logger.warning("%s: источник %s не отработал: %s", what, provider.name, exc)
-            result.errors.append(f"{provider.name}: {exc}")
+            logger.warning(
+                "provider_failed",
+                extra={"kind": what, "provider": provider.name, "error": str(exc)},
+            )
+            result.failures.append(f"{provider.name}: {exc}")
             continue
-        except Exception as exc:  # неожиданная ошибка не должна ронять всю обработку поля
-            logger.exception("%s: источник %s упал неожиданно", what, provider.name)
-            result.errors.append(f"{provider.name}: непредвиденная ошибка {exc}")
+        except Exception as exc:
+            # Неожиданная ошибка источника не должна ронять обработку поля:
+            # для этого и существует цепочка. Стек попадает в лог целиком.
+            logger.exception(
+                "provider_crashed", extra={"kind": what, "provider": provider.name}
+            )
+            result.failures.append(f"{provider.name}: непредвиденная ошибка {exc}")
             continue
 
         if not items:
-            result.errors.append(f"{provider.name}: данных нет за запрошенный период")
+            result.empty_sources.append(provider.name)
             continue
 
         result.items = items
@@ -108,8 +138,8 @@ def fetch_satellite_series(
 ) -> SourceResult[SatelliteObservation]:
     return _try_providers(
         satellite_providers(),
-        lambda p: p.fetch_series(geometry, date_from, date_to),
-        "спутниковые данные",
+        lambda provider: provider.fetch_series(geometry, date_from, date_to),
+        "satellite",
     )
 
 
@@ -118,14 +148,14 @@ def fetch_weather_history(
 ) -> SourceResult[WeatherObservation]:
     return _try_providers(
         weather_history_providers(),
-        lambda p: p.fetch_history(lon, lat, date_from, date_to),
-        "история погоды",
+        lambda provider: provider.fetch_history(lon, lat, date_from, date_to),
+        "weather_history",
     )
 
 
 def fetch_weather_forecast(lon: float, lat: float, days: int) -> SourceResult[WeatherObservation]:
     return _try_providers(
         weather_forecast_providers(),
-        lambda p: p.fetch_forecast(lon, lat, days),
-        "прогноз погоды",
+        lambda provider: provider.fetch_forecast(lon, lat, days),
+        "weather_forecast",
     )

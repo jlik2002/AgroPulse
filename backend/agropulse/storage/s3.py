@@ -27,7 +27,7 @@ def get_s3_client():
         "s3",
         endpoint_url=settings.s3_endpoint_url,
         aws_access_key_id=settings.s3_access_key,
-        aws_secret_access_key=settings.s3_secret_key,
+        aws_secret_access_key=settings.s3_secret_key.get_secret_value(),
         region_name=settings.s3_region,
         # MinIO работает только с подписью v4 и path-style адресацией бакета.
         config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
@@ -59,7 +59,7 @@ def get_object(key: str) -> bytes:
     return response["Body"].read()
 
 
-def build_url(key: str, expires_in: int = 3600) -> str:
+def build_url(key: str, expires_in: int | None = None) -> str:
     """Ссылка на артефакт.
 
     Если задан публичный базовый адрес (в кластере это внешний домен MinIO или CDN),
@@ -71,14 +71,19 @@ def build_url(key: str, expires_in: int = 3600) -> str:
     return get_s3_client().generate_presigned_url(
         "get_object",
         Params={"Bucket": settings.s3_bucket, "Key": key},
-        ExpiresIn=expires_in,
+        ExpiresIn=expires_in or settings.s3_url_expires_seconds,
     )
 
 
 def healthcheck() -> bool:
-    """Доступность хранилища для /health/ready."""
+    """Доступность хранилища для /health/ready.
+
+    Любая ошибка означает «не готов»: проба обязана ответить, а не упасть,
+    иначе под выпадет из балансировки по таймауту, а не по существу.
+    """
     try:
         get_s3_client().head_bucket(Bucket=get_settings().s3_bucket)
         return True
-    except Exception:
+    except Exception as exc:
+        logger.warning("s3_unavailable", extra={"error": str(exc)})
         return False

@@ -1,12 +1,14 @@
 """Схемы поиска региона и готовых сельхозконтуров."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from agropulse.schemas.geo import PolygonGeometry
 
 
 class RegionRead(BaseModel):
     """Найденный по названию регион."""
+
+    model_config = ConfigDict(from_attributes=True)
 
     display_name: str
     lon: float
@@ -18,6 +20,8 @@ class RegionRead(BaseModel):
 
 class ParcelRead(BaseModel):
     """Готовый контур сельхозугодья из открытого источника."""
+
+    model_config = ConfigDict(from_attributes=True)
 
     external_ref: str
     geometry: PolygonGeometry

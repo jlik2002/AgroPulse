@@ -8,29 +8,23 @@
 Пояснительные тексты запрашиваются у языковой модели и вставляются только
 после сверки чисел. Отсутствие текста не мешает отчёту: числовая часть
 самодостаточна, а на месте пояснения появляется указание причины.
+
+Данные модуль не читает: он получает их подготовленными (`reports/data.py`).
+Запрос внутри рендера превратил бы сводный отчёт по хозяйству в N+1.
 """
 
 from __future__ import annotations
 
 import logging
-import uuid
 from datetime import datetime
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 
-from agropulse.db.models import (
-    Anomaly,
-    Field,
-    ForecastRun,
-    Observation,
-    Project,
-    ValueType,
-)
+from agropulse.db.models import Anomaly, Field, ForecastRun, ValueType
 from agropulse.llm import narrative
 from agropulse.reports import charts
+from agropulse.reports.data import FieldData, ProjectData
 
 logger = logging.getLogger(__name__)
 
@@ -89,25 +83,14 @@ def _round(value: float | None, digits: int = 2) -> float | None:
 # ----------------------------------------------------------------------
 
 
-def build_field_report(db: Session, field_id: uuid.UUID, client: str | None = None) -> bytes | None:
-    field = db.get(Field, field_id)
-    if field is None:
-        return None
+def build_field_report(data: FieldData, client: str | None = None) -> bytes:
+    """Аналитический отчёт по одному полю."""
+    field = data.field
+    observations = data.observations
+    anomalies = data.anomalies
+    forecast_run = data.forecast_run
 
-    project = field.project
-    observations = db.scalars(
-        select(Observation)
-        .where(Observation.field_id == field_id)
-        .order_by(Observation.date)
-    ).all()
-    anomalies = db.scalars(
-        select(Anomaly).where(Anomaly.field_id == field_id).order_by(Anomaly.max_zscore)
-    ).all()
-    forecast_run = db.scalar(select(ForecastRun).where(ForecastRun.field_id == field_id))
-
-    in_period = [
-        o for o in observations if project.period_from <= o.date <= project.period_to
-    ]
+    in_period = data.in_period
     observed = [
         (o.date, o.ndvi_mean)
         for o in in_period
@@ -196,8 +179,8 @@ def build_field_report(db: Session, field_id: uuid.UUID, client: str | None = No
             "crop": field.crop,
             "sowing_date": field.sowing_date.isoformat() if field.sowing_date else None,
         },
-        period_from=project.period_from.isoformat(),
-        period_to=project.period_to.isoformat(),
+        period_from=data.period_from.isoformat(),
+        period_to=data.period_to.isoformat(),
         generated_at=datetime.now().strftime("%d.%m.%Y %H:%M"),
         status=field.status.value,
         status_title=STATUS_TITLES.get(field.status.value, field.status.value),
@@ -226,7 +209,13 @@ def build_field_report(db: Session, field_id: uuid.UUID, client: str | None = No
     return _render_pdf(html)
 
 
-def _field_payload(field, quality, anomalies, forecast_run, breakdown) -> dict:
+def _field_payload(
+    field: Field,
+    quality: dict,
+    anomalies: list[Anomaly],
+    forecast_run: ForecastRun | None,
+    breakdown: dict,
+) -> dict:
     """Компактный JSON для языковой модели.
 
     Передаётся только то, что уже рассчитано и проверено: модель не должна
@@ -258,7 +247,7 @@ def _field_payload(field, quality, anomalies, forecast_run, breakdown) -> dict:
     }
 
 
-def _anomaly_payload(field, anomaly) -> dict:
+def _anomaly_payload(field: Field, anomaly: Anomaly) -> dict:
     factors = anomaly.factors or {}
     return {
         "field_name": field.name,
@@ -294,7 +283,7 @@ def _forecast_block(forecast_run: ForecastRun | None) -> dict:
     }
 
 
-def _parse_checklist(result) -> list[str]:
+def _parse_checklist(result: narrative.Narrative | None) -> list[str]:
     """Разобрать список пунктов, полученный от модели."""
     if result is None or not result.text:
         return []
@@ -311,26 +300,13 @@ def _parse_checklist(result) -> list[str]:
 # ----------------------------------------------------------------------
 
 
-def build_project_report(
-    db: Session, project_id: uuid.UUID, client: str | None = None
-) -> bytes | None:
-    project = db.get(Project, project_id)
-    if project is None:
-        return None
-
-    fields = db.scalars(select(Field).where(Field.project_id == project_id)).all()
-
+def build_project_report(data: ProjectData, client: str | None = None) -> bytes:
+    """Сводный отчёт по хозяйству с очередью на осмотр."""
     rows, cards = [], []
-    for field in fields:
-        anomalies = db.scalars(
-            select(Anomaly).where(Anomaly.field_id == field.id).order_by(Anomaly.max_zscore)
-        ).all()
-        observations = db.scalars(
-            select(Observation).where(Observation.field_id == field.id).order_by(Observation.date)
-        ).all()
-        in_period = [
-            o for o in observations if project.period_from <= o.date <= project.period_to
-        ]
+    for field_data in data.fields:
+        field = field_data.field
+        anomalies = field_data.anomalies
+        in_period = field_data.in_period
         observed = [
             (o.date, o.ndvi_mean)
             for o in in_period
@@ -408,7 +384,7 @@ def build_project_report(
 
     summary = narrative.project_summary(
         {
-            "period": f"{project.period_from} — {project.period_to}",
+            "period": f"{data.period_from} — {data.period_to}",
             "counts": counts,
             "fields": [
                 {
@@ -426,8 +402,8 @@ def build_project_report(
     html = _environment.get_template("project_report.html").render(
         css=_css(),
         client=client,
-        period_from=project.period_from.isoformat(),
-        period_to=project.period_to.isoformat(),
+        period_from=data.period_from.isoformat(),
+        period_to=data.period_to.isoformat(),
         generated_at=datetime.now().strftime("%d.%m.%Y %H:%M"),
         total_fields=len(rows),
         counts=counts,

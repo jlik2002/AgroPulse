@@ -31,6 +31,8 @@ class AnomalyRead(BaseModel):
 class RiskRead(BaseModel):
     """Составной риск с раскрытием вклада факторов."""
 
+    model_config = ConfigDict(from_attributes=True)
+
     field_id: uuid.UUID
     status: FieldStatus
     score: float | None
@@ -43,6 +45,8 @@ class RiskRead(BaseModel):
 
 class FieldSummary(BaseModel):
     """Строка сводного дашборда."""
+
+    model_config = ConfigDict(from_attributes=True)
 
     field_id: uuid.UUID
     name: str
@@ -60,6 +64,8 @@ class FieldSummary(BaseModel):
 
 
 class ProjectSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     project_id: uuid.UUID
     period_from: date
     period_to: date

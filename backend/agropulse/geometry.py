@@ -15,7 +15,9 @@ from geoalchemy2.shape import to_shape
 from pyproj import Geod
 from shapely.geometry import mapping, shape
 from shapely.geometry.base import BaseGeometry
+from shapely.validation import explain_validity
 
+from agropulse.errors import InvalidGeometryError
 from agropulse.schemas.geo import PolygonGeometry
 
 SRID = 4326
@@ -27,10 +29,6 @@ MIN_AREA_HA = 0.1
 MAX_AREA_HA = 50_000.0
 
 _GEOD = Geod(ellps="WGS84")
-
-
-class GeometryError(ValueError):
-    """Полигон непригоден для анализа. Текст показывается пользователю."""
 
 
 def geojson_to_shape(geometry: PolygonGeometry | dict) -> BaseGeometry:
@@ -50,31 +48,30 @@ def area_hectares(geom: BaseGeometry) -> float:
 def validate_polygon(geometry: PolygonGeometry | dict) -> tuple[BaseGeometry, float]:
     """Проверить полигон и вернуть его вместе с площадью.
 
-    Возбуждает GeometryError с понятным пользователю текстом — сообщение уходит
-    в ответ API как есть.
+    Возбуждает `InvalidGeometryError` с понятным пользователю текстом:
+    сообщение уходит в ответ API как есть, поэтому оно написано для человека,
+    а машиночитаемым остаётся код ошибки.
     """
     try:
         geom = geojson_to_shape(geometry)
     except Exception as exc:
-        raise GeometryError(f"не удалось разобрать геометрию: {exc}") from exc
+        raise InvalidGeometryError(f"не удалось разобрать геометрию: {exc}") from exc
 
     if geom.is_empty:
-        raise GeometryError("полигон пустой")
+        raise InvalidGeometryError("полигон пустой")
 
     if not geom.is_valid:
         # Самая частая причина — самопересечение контура при ручном рисовании.
-        from shapely.validation import explain_validity
-
-        raise GeometryError(f"полигон некорректен: {explain_validity(geom)}")
+        raise InvalidGeometryError(f"полигон некорректен: {explain_validity(geom)}")
 
     area = area_hectares(geom)
     if area < MIN_AREA_HA:
-        raise GeometryError(
+        raise InvalidGeometryError(
             f"площадь {area:.3f} га меньше минимальной {MIN_AREA_HA} га: "
             "поле не покрыть пикселями Sentinel-2"
         )
     if area > MAX_AREA_HA:
-        raise GeometryError(
+        raise InvalidGeometryError(
             f"площадь {area:.0f} га больше максимальной {MAX_AREA_HA:.0f} га: "
             "разбейте территорию на несколько полей"
         )
@@ -86,7 +83,24 @@ def to_wkt_element(geom: BaseGeometry) -> WKTElement:
     return WKTElement(geom.wkt, srid=SRID)
 
 
-def to_geojson(value: WKBElement | BaseGeometry) -> dict:
-    """Геометрия из базы в GeoJSON без обращения к PostGIS."""
-    geom = to_shape(value) if isinstance(value, WKBElement) else value
+def to_geojson(value: WKBElement | WKTElement | BaseGeometry) -> dict:
+    """Геометрия в GeoJSON без обращения к PostGIS.
+
+    Принимаются оба представления GeoAlchemy2. Разница не теоретическая:
+    только что записанное поле держит в атрибуте WKT, который мы сами туда
+    положили, а прочитанное из базы — WKB. Обрабатывать только второй случай
+    означало бы падение при ответе на POST, но не на GET.
+    """
+    geom = to_shape(value) if isinstance(value, WKBElement | WKTElement) else value
     return mapping(geom)
+
+
+def centroid(geometry: PolygonGeometry | dict | BaseGeometry) -> tuple[float, float]:
+    """Центр полигона в порядке (долгота, широта).
+
+    Нужен там, где данные запрашиваются по точке, а не по контуру: погода
+    отдаётся на координату, и брать её в углу поля неправильно.
+    """
+    geom = geometry if isinstance(geometry, BaseGeometry) else geojson_to_shape(geometry)
+    point = geom.centroid
+    return point.x, point.y

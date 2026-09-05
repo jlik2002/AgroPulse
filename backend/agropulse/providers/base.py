@@ -12,17 +12,27 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Protocol, runtime_checkable
 
+from agropulse.errors import UpstreamError
 
-class ProviderError(RuntimeError):
+
+class ProviderError(UpstreamError):
     """Источник не смог отдать данные.
 
-    Пайплайн ловит это исключение, помечает поле причиной и пробует
+    Наследуется от общей ошибки внешних систем, поэтому HTTP-слой отвечает
+    на неё 503 без отдельного `try/except` в каждом роутере, а пайплайн
+    распознаёт её как повод повторить задачу.
+
+    Цепочка источников ловит это исключение, помечает поле причиной и пробует
     следующий источник, вместо того чтобы падать целиком.
     """
+
+    code = "provider_failed"
 
 
 class ProviderUnavailable(ProviderError):
     """Источник не сконфигурирован или недоступен — пробовать его бессмысленно."""
+
+    code = "provider_unavailable"
 
 
 @dataclass(slots=True)

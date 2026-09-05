@@ -24,8 +24,6 @@ logger = logging.getLogger(__name__)
 # Слаг сверен со списком моделей OpenRouter.
 DEFAULT_MODEL = "qwen/qwen3.8-27b"
 
-REQUEST_TIMEOUT_SECONDS = 120.0
-
 # Предел длины ответа. Без явного значения провайдер режет ответ по своему
 # умолчанию, и текст обрывается на полуслове — а если обрыв приходится
 # на середину числа, сверка законно бракует его целиком.
@@ -45,10 +43,11 @@ class OpenRouterClient:
 
     def __init__(self) -> None:
         settings = get_settings()
-        self._api_key = settings.openrouter_api_key
+        self._api_key = settings.openrouter_api_key.get_secret_value()
         self._base_url = settings.openrouter_base_url.rstrip("/")
         self._model = settings.openrouter_model or DEFAULT_MODEL
         self._enabled = settings.llm_enabled
+        self._timeout = settings.openrouter_timeout_seconds
 
     def is_available(self) -> bool:
         return bool(self._enabled and self._api_key)
@@ -85,7 +84,7 @@ class OpenRouterClient:
                     "Authorization": f"Bearer {self._api_key}",
                     "Content-Type": "application/json",
                 },
-                timeout=REQUEST_TIMEOUT_SECONDS,
+                timeout=self._timeout,
             )
             response.raise_for_status()
             data = response.json()

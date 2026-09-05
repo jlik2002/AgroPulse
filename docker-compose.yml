@@ -16,6 +16,10 @@ x-backend-build: &backend-build
   build:
     context: .
     dockerfile: backend/Dockerfile
+    args:
+      # Локальный образ несёт pytest и ruff, чтобы прогон тестов не требовал
+      # отдельной сборки: docker compose run --rm api pytest
+      INSTALL_DEV: "true"
 
 services:
   postgres:
@@ -79,12 +83,15 @@ services:
 
   api:
     <<: [*backend-build, *backend-env]
-    command: ["uvicorn", "agropulse.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    command: ["uvicorn", "agropulse.main:create_app", "--factory",
+              "--host", "0.0.0.0", "--port", "8000", "--reload"]
     volumes:
       - ./backend:/app/backend        # автоперезагрузка при правках кода
       - ./scripts:/app/scripts        # служебные скрипты проверки
       - ./data:/app/data              # вход и выход batch-инференса
       - ./secrets:/run/secrets:ro     # ключ сервис-аккаунта GEE
+      # Настройки pytest и ruff живут здесь: правка не должна требовать пересборки.
+      - ./pyproject.toml:/app/pyproject.toml:ro
     ports:
       - "8000:8000"
     depends_on:

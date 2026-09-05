@@ -48,12 +48,12 @@ def collect_numbers(payload: object) -> set[float]:
     def walk(node: object) -> None:
         if isinstance(node, bool):
             return
-        if isinstance(node, (int, float)):
+        if isinstance(node, int | float):
             found.add(float(node))
         elif isinstance(node, dict):
             for value in node.values():
                 walk(value)
-        elif isinstance(node, (list, tuple)):
+        elif isinstance(node, list | tuple):
             for value in node:
                 walk(value)
         elif isinstance(node, str):
@@ -76,7 +76,7 @@ def collect_dates(payload: object) -> set[str]:
         if isinstance(node, dict):
             for value in node.values():
                 walk(value)
-        elif isinstance(node, (list, tuple)):
+        elif isinstance(node, list | tuple):
             for value in node:
                 walk(value)
         elif isinstance(node, str):
