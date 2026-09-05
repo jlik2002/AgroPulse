@@ -16,6 +16,7 @@ from agropulse.repositories.forecasts import ForecastRepository
 from agropulse.repositories.jobs import JobRepository
 from agropulse.repositories.observations import ObservationRepository
 from agropulse.repositories.projects import ProjectRepository
+from agropulse.repositories.radar import RadarObservationRepository
 from agropulse.repositories.raw_cache import RawCacheRepository
 
 __all__ = [
@@ -25,5 +26,6 @@ __all__ = [
     "JobRepository",
     "ObservationRepository",
     "ProjectRepository",
+    "RadarObservationRepository",
     "RawCacheRepository",
 ]

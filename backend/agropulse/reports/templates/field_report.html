@@ -73,6 +73,64 @@
 {% if "anomalies" in sections %}
 <div class="page-break"></div>
 
+{% if "radar" in sections %}
+<h2 data-section="radar">Радарная съёмка Sentinel-1</h2>
+{% if radar %}
+<p>
+  Радар измеряет структуру растительного полога и состояние поверхности почвы,
+  не зависит от облачности и работает независимо от времени суток. Это второй,
+  физически независимый способ измерения: совпадение события в радаре и оптике
+  значит больше, чем любой из рядов по отдельности.
+</p>
+<table>
+  <tr><th>Показатель</th><th>Значение</th></tr>
+  <tr><td>Радарных съёмок за период</td><td class="num">{{ radar.scenes }}</td></tr>
+  <tr><td>Основная орбита</td><td>{{ radar.orbit }}</td></tr>
+  <tr><td>Сигнал растительности VH в начале периода, дБ</td><td class="num">{{ radar.vh_first }}</td></tr>
+  <tr><td>Сигнал растительности VH в конце периода, дБ</td><td class="num">{{ radar.vh_last }}</td></tr>
+  <tr><td>Сигнал поверхности VV в конце периода, дБ</td><td class="num">{{ radar.vv_last }}</td></tr>
+  <tr><td>Индекс растительности RVI в конце периода</td><td class="num">{{ radar.rvi_last }}</td></tr>
+  <tr><td>Неоднородность поля, дБ</td><td class="num">{{ radar.heterogeneity }}</td></tr>
+  <tr><td>Доля площади с пониженным сигналом</td><td class="num">{{ radar.low_signal_fraction }}</td></tr>
+</table>
+{% if radar.orbits_total > 1 %}
+  <div class="note">
+    Поле снимают {{ radar.orbits_total }} орбиты. В таблице приведён ряд только
+    основной из них: у разных орбит различается угол падения луча, и их уровни
+    сигнала напрямую не сопоставимы.
+  </div>
+{% endif %}
+{% if radar.events %}
+  <p><strong>Резкие изменения радарного сигнала:</strong></p>
+  <ul>
+    {% for event in radar.events %}
+      <li>
+        {{ event.date }} — {{ event.title | lower }}, {{ event.magnitude_db }} дБ.
+        Возможные причины: {{ event.hypotheses | join(", ") }}.
+        {% if not event.confirmed %}
+          Следующей съёмки той же орбиты в ряду нет, поэтому удержание нового
+          уровня не подтверждено.
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+  <div class="note">
+    Радар фиксирует изменение, но не его причину: одно и то же снижение сигнала
+    возможно при уборке, скашивании, полегании, потере растительной массы и при
+    естественном завершении вегетации. Различить их можно только с учётом
+    оптики, погоды и известной агротехники поля.
+  </div>
+{% else %}
+  <p>Резких изменений радарного сигнала за период не зафиксировано.</p>
+{% endif %}
+{% else %}
+<p>
+  Радарных наблюдений по этому полю нет. Выводы отчёта опираются только на
+  оптический ряд, и подтвердить их вторым независимым источником нельзя.
+</p>
+{% endif %}
+{% endif %}
+
 <h2 data-section="anomalies">Негативные аномальные периоды</h2>
 {% if anomalies %}
   {% for anomaly in anomalies %}
@@ -84,7 +142,17 @@
       <tr><td>Уровень</td><td>{{ anomaly.severity_level }}</td></tr>
       <tr><td>Доля восстановленных значений</td><td class="num">{{ anomaly.restored_fraction }}</td></tr>
       <tr><td>Уверенность в событии</td><td class="num">{{ anomaly.confidence }}</td></tr>
+      {% if anomaly.corroboration is not none %}
+      <tr>
+        <td>Подтверждённость независимыми источниками</td>
+        <td class="num">{{ anomaly.corroboration }} из 100 — {{ anomaly.corroboration_title }}</td>
+      </tr>
+      {% endif %}
     </table>
+    {% if anomaly.corroboration_notes %}
+      <p><strong>Что учтено в оценке подтверждённости:</strong></p>
+      <ul>{% for note in anomaly.corroboration_notes %}<li>{{ note }}</li>{% endfor %}</ul>
+    {% endif %}
     {% if anomaly.phase_mismatch %}
       <div class="note warning">
         Динамика поля не совпадает с его собственной историей. Отклонение может

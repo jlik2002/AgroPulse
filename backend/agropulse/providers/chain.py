@@ -23,9 +23,11 @@ from datetime import date
 
 from agropulse.providers.base import (
     ProviderError,
+    RadarObservation,
     SatelliteObservation,
     WeatherObservation,
 )
+from agropulse.providers.radar_gee import GEERadarProvider
 from agropulse.providers.satellite_gee import GEESatelliteProvider
 from agropulse.providers.weather_openmeteo import OpenMeteoWeatherProvider
 
@@ -116,6 +118,16 @@ def satellite_providers() -> list:
     return [GEESatelliteProvider()]
 
 
+def radar_providers() -> list:
+    """Источники радарных наблюдений.
+
+    Резервного канала нет и он не нужен: радар — дополнение к оптике, а не её
+    замена. Отказ этого источника снижает уверенность выводов, но не мешает
+    посчитать поле, поэтому цепочка из одного элемента здесь не компромисс.
+    """
+    return [GEERadarProvider()]
+
+
 def weather_history_providers() -> list:
     """Историю погоды берём из Open-Meteo.
 
@@ -140,6 +152,16 @@ def fetch_satellite_series(
         satellite_providers(),
         lambda provider: provider.fetch_series(geometry, date_from, date_to),
         "satellite",
+    )
+
+
+def fetch_radar_series(
+    geometry: dict, date_from: date, date_to: date
+) -> SourceResult[RadarObservation]:
+    return _try_providers(
+        radar_providers(),
+        lambda provider: provider.fetch_series(geometry, date_from, date_to),
+        "radar",
     )
 
 

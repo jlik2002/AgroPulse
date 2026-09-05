@@ -13,12 +13,15 @@ from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import date
 
+from agropulse.analytics import radar as radar_module
+from agropulse.analytics.radar import RadarSample
 from agropulse.db.models import (
     Anomaly,
     Field,
     FieldStatus,
     ForecastRun,
     Observation,
+    RadarObservation,
     ValueType,
 )
 from agropulse.db.uow import UnitOfWork
@@ -37,6 +40,16 @@ class RiskView:
     confidence: float | None
     insufficient_reason: str | None
     climatology: dict | None
+
+
+@dataclass(slots=True)
+class RadarSeriesView:
+    """Радарный ряд поля вместе с найденными в нём событиями."""
+
+    field_id: uuid.UUID
+    source: str | None
+    points: list[RadarObservation]
+    events: list[radar_module.RadarEvent] = dataclass_field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -89,6 +102,50 @@ class AnalysisService:
             confidence=breakdown.get("confidence"),
             insufficient_reason=breakdown.get("insufficient_reason"),
             climatology=breakdown.get("climatology"),
+        )
+
+    def radar(self, field_id: uuid.UUID) -> RadarSeriesView:
+        """Радарный ряд Sentinel-1 и резкие изменения в нём.
+
+        События не хранятся отдельной таблицей: они однозначно выводятся из
+        уже записанных производных величин, и лишняя таблица означала бы
+        обязанность держать её в согласии с рядом при каждом пересчёте.
+        """
+        self._require_field(field_id)
+        rows = self._uow.radar.list_for_field(field_id)
+        if not rows:
+            return RadarSeriesView(field_id=field_id, source=None, points=[])
+
+        samples = [
+            RadarSample(
+                date=row.date,
+                orbit_direction=row.orbit_direction,
+                relative_orbit=row.relative_orbit,
+                vv_median_db=row.vv_median_db,
+                vh_median_db=row.vh_median_db,
+                rvi_median=row.rvi_median,
+                vh_vv_difference_db=row.vh_vv_difference_db,
+                spatial_iqr_db=row.spatial_iqr_db,
+                low_signal_fraction=row.low_signal_fraction,
+                valid_fraction=row.valid_fraction,
+            )
+            for row in rows
+        ]
+        derived = {
+            row.date: {
+                "vv_change_db": row.vv_change_db,
+                "vh_change_db": row.vh_change_db,
+                "rvi_change": row.rvi_change,
+                "change_point_score": row.change_point_score,
+            }
+            for row in rows
+            if row.vh_change_db is not None or row.vv_change_db is not None
+        }
+        return RadarSeriesView(
+            field_id=field_id,
+            source=rows[0].source,
+            points=rows,
+            events=radar_module.detect_events(samples, derived),
         )
 
     def forecast(self, field_id: uuid.UUID) -> ForecastRun | None:

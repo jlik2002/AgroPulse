@@ -23,6 +23,8 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from agropulse.analytics import radar as radar_module
+from agropulse.analytics.radar import RadarSample
 from agropulse.db.models import Anomaly, Field, ForecastRun, ValueType
 from agropulse.llm import narrative
 from agropulse.reports import charts
@@ -50,6 +52,16 @@ SEVERITY_TITLES = {
 # Тяжесть события как ступень шкалы. Отдельно от названия: в строке таблицы
 # «Уровень» значение обязано быть уровнем, а «Угнетение биомассы» — это то,
 # что произошло, а не насколько сильно.
+# Словесная передача подтверждённости: число 0..100 само по себе читателю
+# отчёта ничего не говорит, а решение принимается по уровню.
+ORBIT_TITLES = {"ascending": "восходящая", "descending": "нисходящая"}
+
+CORROBORATION_LEVELS = {
+    "high": "высокая",
+    "possible": "средняя",
+    "weak": "низкая",
+}
+
 SEVERITY_LEVELS = {
     "moderate": "Умеренный",
     "critical": "Критический",
@@ -84,6 +96,7 @@ FIELD_SECTIONS: tuple[str, ...] = (
     "summary",
     "state",
     "dynamics",
+    "radar",
     "anomalies",
     "forecast",
     "quality",
@@ -264,6 +277,11 @@ def build_field_report(
                 ),
                 "restored_fraction": _round(anomaly.restored_fraction),
                 "confidence": _round(anomaly.confidence),
+                "corroboration": anomaly.corroboration,
+                "corroboration_title": CORROBORATION_LEVELS.get(
+                    factors.get("corroboration_level") or ""
+                ),
+                "corroboration_notes": factors.get("corroboration_notes") or [],
                 "phase_mismatch": bool(factors.get("phase_mismatch")),
                 "hypotheses": factors.get("hypotheses") or [],
                 "explanation": explanation.text,
@@ -307,6 +325,7 @@ def build_field_report(
             expected,
         ),
         weather_chart=weather_svg,
+        radar=_radar_block(data.radar, data.period_from, data.period_to),
         anomalies=anomaly_blocks,
         checklist=_parse_checklist(checklist_result),
         forecast=_forecast_block(forecast_run),
@@ -321,6 +340,83 @@ def build_field_report(
         methodology={"collection": SATELLITE_COLLECTION},
     )
     return _render_pdf(html)
+
+
+def _radar_block(radar: list, period_from, period_to) -> dict | None:
+    """Сводка радарного ряда за период отчёта.
+
+    Отдаётся `None`, если радарных наблюдений нет: раздел с прочерками
+    вместо чисел только занимал бы место и вводил в заблуждение.
+
+    События берутся у той же функции, что и на экране. Собственный порог здесь
+    был бы источником расхождений: пользователь увидел бы в отчёте события,
+    которых нет в интерфейсе, и наоборот.
+
+    Числа в таблице показываются по одной орбите — той, что покрывает поле
+    чаще. Смешивать орбиты нельзя: у них разный угол падения луча, и разброс
+    оказался бы замером геометрии съёмки, а не состояния поля.
+    """
+    usable = [
+        row
+        for row in radar
+        if row.vh_median_db is not None and period_from <= row.date <= period_to
+    ]
+    if not usable:
+        return None
+
+    counts: dict[tuple, int] = {}
+    for row in usable:
+        key = (row.orbit_direction, row.relative_orbit)
+        counts[key] = counts.get(key, 0) + 1
+    dominant = max(counts, key=lambda key: counts[key])
+    main = [row for row in usable if (row.orbit_direction, row.relative_orbit) == dominant]
+
+    samples = [
+        RadarSample(
+            date=row.date,
+            orbit_direction=row.orbit_direction,
+            relative_orbit=row.relative_orbit,
+            vv_median_db=row.vv_median_db,
+            vh_median_db=row.vh_median_db,
+            rvi_median=row.rvi_median,
+        )
+        for row in usable
+    ]
+    derived = {
+        row.date: {
+            "vv_change_db": row.vv_change_db,
+            "vh_change_db": row.vh_change_db,
+            "rvi_change": row.rvi_change,
+            "change_point_score": row.change_point_score,
+        }
+        for row in usable
+    }
+
+    return {
+        "scenes": len(usable),
+        "orbit": ORBIT_TITLES.get(dominant[0] or "", "неизвестна"),
+        "orbits_total": len(counts),
+        "vh_first": _round(main[0].vh_median_db, 1),
+        "vh_last": _round(main[-1].vh_median_db, 1),
+        "vv_last": _round(main[-1].vv_median_db, 1),
+        "rvi_last": _round(main[-1].rvi_median, 2),
+        "heterogeneity": _round(main[-1].spatial_iqr_db, 1),
+        "low_signal_fraction": (
+            f"{main[-1].low_signal_fraction * 100:.0f}%"
+            if main[-1].low_signal_fraction is not None
+            else "—"
+        ),
+        "events": [
+            {
+                "date": event.date.isoformat(),
+                "title": event.title,
+                "magnitude_db": _round(event.magnitude_db, 1),
+                "hypotheses": event.hypotheses,
+                "confirmed": event.confirmed,
+            }
+            for event in radar_module.detect_events(samples, derived)
+        ],
+    }
 
 
 def _table_rows(observations: list) -> list[dict]:

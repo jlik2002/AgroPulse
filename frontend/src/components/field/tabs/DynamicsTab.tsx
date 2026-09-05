@@ -5,6 +5,7 @@ import type { FieldAnalysis } from "@/hooks/useFieldAnalysis";
 import { ChartLegend } from "@/components/charts/ChartLegend";
 import { MiniSeriesChart } from "@/components/charts/MiniSeriesChart";
 import { NdviChart } from "@/components/charts/NdviChart";
+import { RadarPanel } from "@/components/field/RadarPanel";
 import { Card, CardHeader } from "@/components/ui/Card";
 import { Checkbox } from "@/components/ui/Checkbox";
 import { Tooltip } from "@/components/ui/Tooltip";
@@ -82,6 +83,12 @@ export function DynamicsTab({ analysis, onOpenScenes }: DynamicsTabProps) {
           />
         </div>
       </Card>
+
+      <RadarPanel
+        radar={analysis.radar.data}
+        anomalies={anomalies}
+        today={analysis.series.today}
+      />
 
       {showWeather ? (
         <div className="grid grid-cols-4 gap-4">

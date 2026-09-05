@@ -83,11 +83,12 @@ class AnomalySeverity(str, enum.Enum):
 
 
 class PipelineStage(str, enum.Enum):
-    """Девять стадий обработки. Ровно в этом порядке показываются пользователю."""
+    """Десять стадий обработки. Ровно в этом порядке показываются пользователю."""
 
     SEARCH_SCENES = "search_scenes"        # поиск спутниковых сцен
     CLOUD_MASKING = "cloud_masking"        # фильтрация облаков и теней
     INDICES = "indices"                    # расчёт индексов
+    RADAR = "radar"                        # радарные наблюдения Sentinel-1
     WEATHER = "weather"                    # получение погоды
     TIMESERIES = "timeseries"              # построение временного ряда
     GAP_FILLING = "gap_filling"            # восстановление пропусков
@@ -199,6 +200,9 @@ class Field(Base):
     )
 
     project: Mapped[Project] = relationship(back_populates="fields")
+    radar_observations: Mapped[list[RadarObservation]] = relationship(
+        back_populates="field", cascade="all, delete-orphan", passive_deletes=True
+    )
     observations: Mapped[list[Observation]] = relationship(
         back_populates="field", cascade="all, delete-orphan"
     )
@@ -291,6 +295,77 @@ class Observation(Base):
     )
 
 
+class RadarObservation(Base):
+    """Радарное наблюдение Sentinel-1 по полю за одну дату.
+
+    Отдельная таблица, а не строки в `observations`, и это не вопрос вкуса.
+    Радар измеряет другую физическую величину — обратное рассеяние, а не
+    отражение в оптическом диапазоне, — и попадание таких строк в общий ряд
+    сделало бы бессмысленными и график NDVI, и климатическую норму, и выгрузку.
+    К тому же у радара своя сетка дат: пролёты Sentinel-1 и Sentinel-2 не
+    совпадают, и общий ключ идентичности пришлось бы натягивать.
+
+    Геометрия съёмки (направление пролёта, относительный номер орбиты) хранится
+    вместе со значениями: разности между датами имеют смысл только внутри одной
+    орбиты, и без этих полей ряд нельзя корректно продифференцировать.
+    """
+
+    __tablename__ = "radar_observations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    field_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("fields.id", ondelete="CASCADE"), index=True
+    )
+    date: Mapped[date] = mapped_column(Date, nullable=False)
+    source: Mapped[str] = mapped_column(String(50), nullable=False)  # s1_gee
+
+    # Геометрия съёмки — часть идентичности наблюдения, а не справочная деталь.
+    orbit_direction: Mapped[str | None] = mapped_column(String(20))
+    relative_orbit: Mapped[int | None] = mapped_column(Integer)
+
+    # Медианы по полю, дБ.
+    vv_median_db: Mapped[float | None] = mapped_column(Float)
+    vh_median_db: Mapped[float | None] = mapped_column(Float)
+    vh_vv_difference_db: Mapped[float | None] = mapped_column(Float)
+    # Radar Vegetation Index, безразмерный, считается в линейных значениях.
+    rvi_median: Mapped[float | None] = mapped_column(Float)
+
+    # Неоднородность поля на эту дату.
+    spatial_iqr_db: Mapped[float | None] = mapped_column(Float)
+    low_signal_fraction: Mapped[float | None] = mapped_column(Float)
+
+    # Изменение относительно предыдущего снимка той же орбиты. Заполняется
+    # на стадии анализа: провайдер отдаёт только измеренные величины.
+    vv_change_db: Mapped[float | None] = mapped_column(Float)
+    vh_change_db: Mapped[float | None] = mapped_column(Float)
+    rvi_change: Mapped[float | None] = mapped_column(Float)
+    # Насколько резким был переход по меркам собственной истории поля, 0..1.
+    change_point_score: Mapped[float | None] = mapped_column(Float)
+
+    valid_fraction: Mapped[float | None] = mapped_column(Float)
+    scene_id: Mapped[str | None] = mapped_column(String(200))
+    missing_reason: Mapped[str | None] = mapped_column(String(200))
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    field: Mapped[Field] = relationship(back_populates="radar_observations")
+
+    __table_args__ = (
+        UniqueConstraint("field_id", "date", "source", name="uq_radar_observation_identity"),
+        Index("ix_radar_observations_field_date", "field_id", "date"),
+        CheckConstraint(
+            "(valid_fraction IS NULL OR valid_fraction BETWEEN 0 AND 1) "
+            "AND (low_signal_fraction IS NULL OR low_signal_fraction BETWEEN 0 AND 1) "
+            "AND (change_point_score IS NULL OR change_point_score BETWEEN 0 AND 1)",
+            name="ck_radar_observations_fraction_range",
+        ),
+        CheckConstraint(
+            "orbit_direction IS NULL OR orbit_direction IN ('ascending', 'descending')",
+            name="ck_radar_observations_orbit_direction",
+        ),
+    )
+
+
 # --------------------------------------------------------------------------
 # Аномалии и прогноз
 # --------------------------------------------------------------------------
@@ -322,6 +397,12 @@ class Anomaly(Base):
     # Доля восстановленных точек внутри периода: чем она выше, тем осторожнее вывод.
     restored_fraction: Mapped[float | None] = mapped_column(Float)
     confidence: Mapped[float | None] = mapped_column(Float)
+
+    # Подтверждённость события независимыми источниками, 0..100. Отличается от
+    # `confidence` по смыслу: `confidence` говорит, хватило ли данных, чтобы
+    # вообще считать событие; `corroboration` — сошлись ли на нём радар, оптика
+    # и погода. Событие может быть надёжно измерено и при этом не подтверждено.
+    corroboration: Mapped[int | None] = mapped_column(Integer)
 
     # Совпавшие факторы: динамика NDMI, температура, осадки. Это гипотеза, а не диагноз.
     factors: Mapped[dict | None] = mapped_column(JSONB)

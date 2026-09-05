@@ -98,8 +98,54 @@ export interface Anomaly {
   mean_zscore: number | null;
   restored_fraction: number | null;
   confidence: number | null;
+  /** Подтверждённость независимыми источниками, 0..100. Отвечает не на тот же
+   *  вопрос, что `confidence`: не «хватило ли данных посчитать событие»,
+   *  а «сошлись ли на нём радар, оптика и погода». */
+  corroboration: number | null;
   factors: Record<string, unknown> | null;
   explanation: string | null;
+}
+
+/** Точка радарного ряда Sentinel-1. Значения — медианы по полю в децибелах. */
+export interface RadarPoint {
+  date: string;
+  /** Геометрия съёмки: сравнивать между собой можно только точки одной орбиты. */
+  orbit_direction: string | null;
+  relative_orbit: number | null;
+  vv_median_db: number | null;
+  vh_median_db: number | null;
+  vh_vv_difference_db: number | null;
+  rvi_median: number | null;
+  spatial_iqr_db: number | null;
+  low_signal_fraction: number | null;
+  vv_change_db: number | null;
+  vh_change_db: number | null;
+  rvi_change: number | null;
+  change_point_score: number | null;
+  valid_fraction: number | null;
+  missing_reason: string | null;
+}
+
+export type RadarEventKind = "vegetation_drop" | "vegetation_rise" | "surface_change";
+
+/** Резкое изменение радарного сигнала. Причина не называется: одно и то же
+ *  изменение возможно по нескольким причинам, и радар между ними не выбирает. */
+export interface RadarEvent {
+  date: string;
+  kind: RadarEventKind;
+  magnitude_db: number;
+  score: number | null;
+  title: string;
+  hypotheses: string[];
+  /** Удержался ли новый уровень на следующей съёмке той же орбиты. */
+  confirmed: boolean;
+}
+
+export interface RadarSeries {
+  field_id: string;
+  source: string | null;
+  points: RadarPoint[];
+  events: RadarEvent[];
 }
 
 export interface Risk {

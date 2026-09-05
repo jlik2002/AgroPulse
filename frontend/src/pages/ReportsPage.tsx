@@ -44,6 +44,7 @@ const FIELD_SECTIONS: SectionOption[] = [
   { key: "summary", label: "Краткий вывод" },
   { key: "state", label: "Состояние поля и снимки" },
   { key: "dynamics", label: "Динамика NDVI" },
+  { key: "radar", label: "Радар Sentinel-1" },
   { key: "anomalies", label: "Найденные аномалии" },
   { key: "forecast", label: "Прогноз на 14 дней" },
   { key: "quality", label: "Качество данных" },

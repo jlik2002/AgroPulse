@@ -23,9 +23,63 @@ class AnomalyRead(BaseModel):
     # Доля восстановленных точек внутри периода: чем выше, тем осторожнее вывод.
     restored_fraction: float | None
     confidence: float | None
+    # Подтверждённость независимыми источниками, 0..100. Отвечает на другой
+    # вопрос, нежели `confidence`: не «хватило ли данных посчитать», а
+    # «сошлись ли на событии радар, оптика и погода».
+    corroboration: int | None
     # Совпавшие факторы и гипотезы о причинах. Это версии, а не диагноз.
     factors: dict | None
     explanation: str | None
+
+
+class RadarPoint(BaseModel):
+    """Точка радарного ряда Sentinel-1."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    date: date
+    # Геометрия съёмки: сравнивать между собой можно только точки одной орбиты.
+    orbit_direction: str | None
+    relative_orbit: int | None
+    vv_median_db: float | None
+    vh_median_db: float | None
+    vh_vv_difference_db: float | None
+    rvi_median: float | None
+    spatial_iqr_db: float | None
+    low_signal_fraction: float | None
+    vv_change_db: float | None
+    vh_change_db: float | None
+    rvi_change: float | None
+    change_point_score: float | None
+    valid_fraction: float | None
+    missing_reason: str | None
+
+
+class RadarEventRead(BaseModel):
+    """Резкое изменение радарного сигнала.
+
+    Причина не называется: одно и то же изменение возможно по нескольким
+    причинам, и выбрать между ними радар не может.
+    """
+
+    date: date
+    kind: str
+    magnitude_db: float
+    score: float | None
+    title: str
+    hypotheses: list[str]
+    # Удержался ли новый уровень на следующей съёмке той же орбиты. У последнего
+    # снимка ряда проверить нечем, и такое событие показывается с оговоркой.
+    confirmed: bool
+
+
+class RadarSeries(BaseModel):
+    """Радарный ряд поля вместе с найденными в нём событиями."""
+
+    field_id: uuid.UUID
+    source: str | None
+    points: list[RadarPoint]
+    events: list[RadarEventRead]
 
 
 class RiskRead(BaseModel):

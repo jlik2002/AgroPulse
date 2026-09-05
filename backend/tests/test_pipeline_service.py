@@ -356,6 +356,7 @@ def test_progress_stages_are_recorded(
         "search_scenes",
         "cloud_masking",
         "indices",
+        "radar",
         "weather",
         "timeseries",
     }

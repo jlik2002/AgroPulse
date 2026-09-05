@@ -24,6 +24,7 @@ from agropulse.repositories import (
     JobRepository,
     ObservationRepository,
     ProjectRepository,
+    RadarObservationRepository,
     RawCacheRepository,
 )
 
@@ -41,6 +42,7 @@ class UnitOfWork:
         self.projects = ProjectRepository(session)
         self.fields = FieldRepository(session)
         self.observations = ObservationRepository(session)
+        self.radar = RadarObservationRepository(session)
         self.anomalies = AnomalyRepository(session)
         self.forecasts = ForecastRepository(session)
         self.jobs = JobRepository(session)

@@ -29,9 +29,11 @@ from datetime import date, timedelta
 
 from agropulse.analytics import anomalies as anomalies_module
 from agropulse.analytics import climatology as climatology_module
+from agropulse.analytics import radar as radar_module
 from agropulse.analytics import risk as risk_module
 from agropulse.analytics.anomalies import AnomalyPeriod, SeriesSample
 from agropulse.analytics.climatology import Climatology, phase_of
+from agropulse.analytics.radar import RadarSample
 from agropulse.analytics.risk import RiskAssessment
 from agropulse.config import Settings
 from agropulse.db.models import (
@@ -100,6 +102,8 @@ class AnalysisContext:
     ndmi_by_date: dict[date, float]
     weather_by_date: dict[date, tuple[float | None, float | None]]
     valid_fractions: list[float]
+    cloud_by_date: dict[date, float] = dataclass_field(default_factory=dict)
+    radar: list[RadarSample] = dataclass_field(default_factory=list)
 
     @property
     def observed_dates(self) -> set[date]:
@@ -118,6 +122,9 @@ class AnalysisOutcome:
     zscores: dict[date, float]
     forecast: ForecastResult
     assessment: RiskAssessment
+    # Производные величины радарного ряда по датам и найденные в нём события.
+    radar_derived: dict[date, dict] = dataclass_field(default_factory=dict)
+    radar_events: list[radar_module.RadarEvent] = dataclass_field(default_factory=list)
     in_period: list[SeriesSample] = dataclass_field(default_factory=list)
     # Коридор нормы по датам периода: (нижняя граница, верхняя). Из него
     # интерфейс строит «ожидаемую динамику» — середину коридора.
@@ -152,10 +159,12 @@ class FieldPipeline:
         satellite = self._search_scenes(context)
         usable = sum(1 for item in satellite.items if item.ndvi_mean is not None)
         self._report_masking_stages(context, satellite, usable)
+        radar = self._fetch_radar(context)
         weather = self._fetch_weather(context)
 
-        errors = satellite.errors + weather.errors
+        errors = satellite.errors + radar.errors + weather.errors
         stored = self._store_timeseries(context, satellite, weather, usable, errors)
+        radar_stored = self._store_radar(context, radar)
 
         logger.info(
             "field_collected",
@@ -163,6 +172,7 @@ class FieldPipeline:
                 "field_id": str(field_id),
                 "stored": stored,
                 "usable": usable,
+                "radar_stored": radar_stored,
                 "satellite_source": satellite.source,
             },
         )
@@ -171,7 +181,9 @@ class FieldPipeline:
             "status": "ok" if usable else "insufficient_data",
             "stored": stored,
             "usable": usable,
+            "radar_stored": radar_stored,
             "satellite_source": satellite.source,
+            "radar_source": radar.source,
             "weather_source": weather.source,
             "errors": errors or None,
         }
@@ -224,6 +236,27 @@ class FieldPipeline:
             stage.message(f"непригодных по облачности: {cloudy}", 1.0)
         with self._stage(context.project_id, context.field_id, PipelineStage.INDICES) as stage:
             stage.message(f"индексы рассчитаны для {usable} дат", 1.0)
+
+    def _fetch_radar(self, context: CollectContext):
+        """Собрать радарный ряд Sentinel-1.
+
+        Радар — дополнение, а не основа: его отказ снижает подтверждённость
+        выводов, но не мешает посчитать поле. Поэтому стадия завершается
+        штатно даже при пустом ответе, а причина уходит в качество данных.
+        """
+        with self._stage(context.project_id, context.field_id, PipelineStage.RADAR) as stage:
+            radar = chain.fetch_radar_series(
+                context.geometry, context.history_from, context.period_to
+            )
+            usable = sum(1 for item in radar.items if item.vh_median_db is not None)
+            stage.message(f"радарных съёмок пригодных: {usable}", 1.0)
+        return radar
+
+    def _store_radar(self, context: CollectContext, radar) -> int:
+        if not radar.items:
+            return 0
+        with unit_of_work() as uow:
+            return uow.radar.upsert(_radar_rows(context.field_id, radar.items))
 
     def _fetch_weather(self, context: CollectContext):
         with self._stage(context.project_id, context.field_id, PipelineStage.WEATHER) as stage:
@@ -291,6 +324,7 @@ class FieldPipeline:
         with unit_of_work() as uow:
             field = self._require_field(uow, field_id)
             observations = uow.observations.list_for_field(field_id, (ValueType.OBSERVED,))
+            radar_rows = uow.radar.list_for_field(field_id)
 
             context = AnalysisContext(
                 field_id=field_id,
@@ -313,6 +347,12 @@ class FieldPipeline:
                     for o in observations
                     if o.ndvi_mean is not None and o.valid_fraction is not None
                 ],
+                cloud_by_date={
+                    o.date: o.cloud_fraction
+                    for o in observations
+                    if o.cloud_fraction is not None
+                },
+                radar=[_to_radar_sample(row) for row in radar_rows],
             )
 
         self._fill_daily_weather(context)
@@ -344,6 +384,11 @@ class FieldPipeline:
 
         climatology, periods, zscores = self._detect_anomalies(context, samples, in_period)
 
+        # Радар не участвует в поиске аномалий и не меняет их границы: событие
+        # находится по оптике, а радар отвечает на отдельный вопрос — сошлись
+        # ли на нём независимые способы измерения.
+        radar_derived, radar_events = self._analyze_radar(context, periods, in_period)
+
         # Прогноз и риск считаются в одной стадии: пользователю они
         # показываются вместе и по отдельности смысла не имеют.
         with self._stage(
@@ -373,9 +418,37 @@ class FieldPipeline:
             zscores=zscores,
             forecast=forecast,
             assessment=assessment,
+            radar_derived=radar_derived,
+            radar_events=radar_events,
             in_period=in_period,
             norm_bands=_norm_bands(climatology, in_period),
         )
+
+    def _analyze_radar(
+        self,
+        context: AnalysisContext,
+        periods: list[AnomalyPeriod],
+        in_period: list[SeriesSample],
+    ) -> tuple[dict[date, dict], list[radar_module.RadarEvent]]:
+        """Посчитать производные радарного ряда и подтвердить ими аномалии.
+
+        Отсутствие радара — штатная ситуация: поле могло быть собрано до
+        появления этого источника, а Earth Engine мог быть недоступен. Тогда
+        подтверждённость считается по одной оптике и погоде, и это честно
+        отражается в её составе.
+        """
+        if not context.radar:
+            for period in periods:
+                _apply_corroboration(period, context, in_period, samples=[], events=[])
+            return {}, []
+
+        derived = radar_module.derive(context.radar)
+        events = radar_module.detect_events(context.radar, derived)
+        for period in periods:
+            _apply_corroboration(
+                period, context, in_period, samples=context.radar, events=events
+            )
+        return derived, events
 
     def _restore_gaps(
         self, context: AnalysisContext, client: MLClient
@@ -550,6 +623,7 @@ class FieldPipeline:
             uow.observations.set_climatology(
                 context.field_id, outcome.zscores, outcome.norm_bands
             )
+            uow.radar.set_derived(context.field_id, outcome.radar_derived)
             uow.anomalies.replace_for_field(
                 context.field_id,
                 [_to_anomaly(context.field_id, period) for period in outcome.periods],
@@ -635,6 +709,90 @@ class FieldPipeline:
 # ----------------------------------------------------------------------
 
 
+def _to_radar_sample(row) -> RadarSample:
+    return RadarSample(
+        date=row.date,
+        orbit_direction=row.orbit_direction,
+        relative_orbit=row.relative_orbit,
+        vv_median_db=row.vv_median_db,
+        vh_median_db=row.vh_median_db,
+        rvi_median=row.rvi_median,
+        vh_vv_difference_db=row.vh_vv_difference_db,
+        spatial_iqr_db=row.spatial_iqr_db,
+        low_signal_fraction=row.low_signal_fraction,
+        valid_fraction=row.valid_fraction,
+    )
+
+
+def _apply_corroboration(
+    period: AnomalyPeriod,
+    context: AnalysisContext,
+    in_period: list[SeriesSample],
+    samples: list[RadarSample],
+    events: list[radar_module.RadarEvent],
+) -> None:
+    """Дописать в аномалию оценку подтверждённости независимыми источниками.
+
+    Результат кладётся в `factors`, потому что оттуда он уезжает в API и отчёт
+    без отдельного преобразования, и дублируется отдельной колонкой — по ней
+    аномалии можно отбирать запросом, не разбирая JSON.
+    """
+    clouds = [
+        value
+        for day, value in context.cloud_by_date.items()
+        if period.start_date <= day <= period.end_date
+    ]
+    observed_points = sum(
+        1
+        for sample in in_period
+        if period.start_date <= sample.date <= period.end_date
+        and sample.value_type == ValueType.OBSERVED
+    )
+
+    result = radar_module.corroborate(
+        start_date=period.start_date,
+        end_date=period.end_date,
+        observed_points=observed_points,
+        restored_fraction=period.restored_fraction,
+        cloud_fraction=sum(clouds) / len(clouds) if clouds else None,
+        weather_hypotheses=period.factors.get("hypotheses") or [],
+        samples=samples,
+        events=events,
+    )
+
+    period.factors["corroboration"] = result.score
+    period.factors["corroboration_level"] = result.level
+    period.factors["corroboration_parts"] = result.parts
+    period.factors["corroboration_notes"] = result.notes
+
+
+def _radar_rows(field_id: uuid.UUID, items: list) -> list[dict]:
+    """Строки радарных наблюдений.
+
+    Производные величины здесь не заполняются: они зависят от всего ряда
+    целиком и считаются на стадии анализа, когда ряд собран.
+    """
+    return [
+        {
+            "field_id": field_id,
+            "date": item.date,
+            "source": item.source,
+            "orbit_direction": item.orbit_direction,
+            "relative_orbit": item.relative_orbit,
+            "vv_median_db": item.vv_median_db,
+            "vh_median_db": item.vh_median_db,
+            "vh_vv_difference_db": item.vh_vv_difference_db,
+            "rvi_median": item.rvi_median,
+            "spatial_iqr_db": item.spatial_iqr_db,
+            "low_signal_fraction": item.low_signal_fraction,
+            "valid_fraction": item.valid_fraction,
+            "scene_id": item.scene_id,
+            "missing_reason": item.missing_reason,
+        }
+        for item in items
+    ]
+
+
 def _observation_rows(field_id: uuid.UUID, satellite: list, weather: list) -> list[dict]:
     """Строки наблюдений, сшитые с погодой по дате."""
     weather_by_date = {item.date: item for item in weather}
@@ -713,6 +871,7 @@ def _to_anomaly(field_id: uuid.UUID, period: AnomalyPeriod) -> Anomaly:
         mean_zscore=period.mean_zscore,
         restored_fraction=period.restored_fraction,
         confidence=period.confidence,
+        corroboration=period.factors.get("corroboration"),
         factors=period.factors,
     )
 

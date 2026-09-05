@@ -19,6 +19,7 @@ import type {
   PolygonGeometry,
   Project,
   ProjectSummary,
+  RadarSeries,
   Region,
   Risk,
   Timeseries,
@@ -31,6 +32,7 @@ export const keys = {
   field: (id: string) => ["field", id] as const,
   timeseries: (id: string) => ["timeseries", id] as const,
   anomalies: (id: string) => ["anomalies", id] as const,
+  radar: (id: string) => ["radar", id] as const,
   risk: (id: string) => ["risk", id] as const,
   forecast: (id: string) => ["forecast", id] as const,
   summary: (projectId: string) => ["summary", projectId] as const,
@@ -151,6 +153,7 @@ export function useUpdateField(projectId: string) {
         keys.field(field.id),
         keys.timeseries(field.id),
         keys.anomalies(field.id),
+        keys.radar(field.id),
         keys.risk(field.id),
         keys.forecast(field.id),
         keys.summary(projectId),
@@ -203,6 +206,15 @@ export function useAnomalies(fieldId: string | undefined, options?: Options<Anom
   return useQuery({
     queryKey: keys.anomalies(fieldId ?? ""),
     queryFn: () => request<Anomaly[]>(`/fields/${fieldId}/anomalies`),
+    enabled: Boolean(fieldId),
+    ...options,
+  });
+}
+
+export function useRadar(fieldId: string | undefined, options?: Options<RadarSeries>) {
+  return useQuery({
+    queryKey: keys.radar(fieldId ?? ""),
+    queryFn: () => request<RadarSeries>(`/fields/${fieldId}/radar`),
     enabled: Boolean(fieldId),
     ...options,
   });

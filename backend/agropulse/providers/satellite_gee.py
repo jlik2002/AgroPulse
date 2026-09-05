@@ -52,6 +52,11 @@ _init_lock = threading.Lock()
 _initialized_pid: int | None = None
 
 
+def _is_configured() -> bool:
+    """Есть ли ключ сервис-аккаунта. Общая проверка для всех источников GEE."""
+    return os.path.isfile(get_settings().gee_service_account_file)
+
+
 def _ensure_initialized() -> None:
     """Инициализировать Earth Engine один раз на процесс.
 
@@ -102,7 +107,7 @@ class GEESatelliteProvider:
     name = "s2_gee"
 
     def is_available(self) -> bool:
-        return os.path.isfile(get_settings().gee_service_account_file)
+        return _is_configured()
 
     def fetch_series(
         self, geometry: dict, date_from: date, date_to: date

@@ -42,6 +42,9 @@ export const CHART = {
     forecastBand: "rgba(123, 73, 191, 0.14)",
     expected: "#9CA1AC",
     ndmi: "#0FA3A0",
+    // Радар: VH отражает структуру растительности, VV — поверхность почвы.
+    radarVh: "#1F7A4D",
+    radarVv: "#B4531F",
     temp: "#FB541C",
     precip: "#1674E2",
     anomaly: "rgba(229, 37, 44, 0.07)",

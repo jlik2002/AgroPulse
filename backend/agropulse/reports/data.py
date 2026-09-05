@@ -12,7 +12,13 @@ from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import date
 
-from agropulse.db.models import Anomaly, Field, ForecastRun, Observation
+from agropulse.db.models import (
+    Anomaly,
+    Field,
+    ForecastRun,
+    Observation,
+    RadarObservation,
+)
 
 
 @dataclass(slots=True)
@@ -23,6 +29,7 @@ class FieldData:
     period_from: date
     period_to: date
     observations: list[Observation] = dataclass_field(default_factory=list)
+    radar: list[RadarObservation] = dataclass_field(default_factory=list)
     anomalies: list[Anomaly] = dataclass_field(default_factory=list)
     forecast_run: ForecastRun | None = None
 

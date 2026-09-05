@@ -130,6 +130,7 @@ class ReportService:
             period_from=field.project.period_from,
             period_to=field.project.period_to,
             observations=self._uow.observations.list_for_field(field_id),
+            radar=self._uow.radar.list_for_field(field_id),
             anomalies=self._uow.anomalies.list_for_field(field_id),
             forecast_run=self._uow.forecasts.get_for_field(field_id),
         )
@@ -142,6 +143,7 @@ class ReportService:
         fields = self._uow.fields.list_for_project(project_id)
         field_ids = [field.id for field in fields]
         observations = self._uow.observations.list_for_fields(field_ids)
+        radar = self._uow.radar.list_for_fields(field_ids)
         anomalies = self._uow.anomalies.list_for_fields(field_ids)
         forecasts = self._uow.forecasts.get_for_fields(field_ids)
 
@@ -155,6 +157,7 @@ class ReportService:
                     period_from=project.period_from,
                     period_to=project.period_to,
                     observations=observations.get(field.id, []),
+                    radar=radar.get(field.id, []),
                     anomalies=anomalies.get(field.id, []),
                     forecast_run=forecasts.get(field.id),
                 )

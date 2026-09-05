@@ -6,7 +6,14 @@
 
 import { useMemo } from "react";
 
-import { useAnomalies, useField, useForecast, useRisk, useTimeseries } from "@/api/queries";
+import {
+  useAnomalies,
+  useField,
+  useForecast,
+  useRadar,
+  useRisk,
+  useTimeseries,
+} from "@/api/queries";
 import type { Observation } from "@/api/types";
 import {
   maxDeviation,
@@ -20,6 +27,7 @@ export function useFieldAnalysis(fieldId: string | undefined) {
   const field = useField(fieldId);
   const timeseries = useTimeseries(fieldId);
   const anomalies = useAnomalies(fieldId);
+  const radar = useRadar(fieldId);
   const risk = useRisk(fieldId);
   const forecast = useForecast(fieldId);
 
@@ -41,6 +49,7 @@ export function useFieldAnalysis(fieldId: string | undefined) {
     field,
     timeseries,
     anomalies,
+    radar,
     risk,
     forecast,
     series,

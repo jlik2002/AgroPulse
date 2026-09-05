@@ -11,6 +11,7 @@ _В работе._
 | Источник | Что берём | Статус |
 |---|---|---|
 | Google Earth Engine, `COPERNICUS/S2_SR_HARMONIZED` | Sentinel-2 L2A: NDVI, NDMI, EVI, доля пригодных пикселей | **подключён** (E1) |
+| Google Earth Engine, `COPERNICUS/S1_GRD` | Sentinel-1 IW GRD: VV, VH, RVI, неоднородность поля | **подключён** (E10) |
 | STAC (Earth Search / AWS Open Data) | резервный канал Sentinel-2 | реализован и проверен, но в пайплайн не подключён |
 | Open-Meteo | архив ERA5 и прогноз погоды на 14 дней | **подключён** (E2), основной источник |
 | ERA5-Land через GEE (`ECMWF/ERA5_LAND/DAILY_AGGR`) | резервная история погоды | **подключён** (E2) |

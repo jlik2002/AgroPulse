@@ -51,6 +51,58 @@ class SatelliteObservation:
     missing_reason: str | None = None
 
 
+@dataclass(slots=True)
+class RadarObservation:
+    """Радарное наблюдение по полю за одну дату.
+
+    Значения VV и VH — медианы по полю в децибелах. Медиана, а не среднее:
+    радарный сигнал зашумлён спеклом, и одиночные яркие пиксели (техника,
+    строение, столб ЛЭП внутри контура) утягивают среднее, но не медиану.
+
+    Геометрия съёмки хранится рядом со значениями и является частью
+    идентичности наблюдения. Сравнивать между собой можно только снимки одной
+    орбиты: смена направления пролёта или относительного номера орбиты меняет
+    угол падения луча, а вместе с ним и уровень сигнала — на величину,
+    сопоставимую с настоящими изменениями на поле.
+    """
+
+    date: date
+    source: str
+    # Геометрия съёмки. Без неё разности между датами считать нельзя.
+    orbit_direction: str | None = None      # ascending | descending
+    relative_orbit: int | None = None
+    # Основные величины, дБ.
+    vv_median_db: float | None = None
+    vh_median_db: float | None = None
+    vh_vv_difference_db: float | None = None
+    # Radar Vegetation Index, считается в линейных значениях, безразмерный.
+    rvi_median: float | None = None
+    # Разброс VV внутри поля (межквартильный размах), дБ — мера неоднородности.
+    spatial_iqr_db: float | None = None
+    # Доля площади поля, где сигнал заметно ниже медианы самого поля.
+    low_signal_fraction: float | None = None
+    valid_fraction: float | None = None
+    scene_id: str | None = None
+    missing_reason: str | None = None
+
+
+@runtime_checkable
+class RadarProvider(Protocol):
+    """Источник радарных наблюдений."""
+
+    name: str
+
+    def is_available(self) -> bool:
+        """Проверка конфигурации без обращения к сети."""
+        ...
+
+    def fetch_series(
+        self, geometry: dict, date_from: date, date_to: date
+    ) -> list[RadarObservation]:
+        """Временной ряд радарных величин по полигону, по одной записи на дату."""
+        ...
+
+
 @runtime_checkable
 class SatelliteProvider(Protocol):
     """Источник спутниковых наблюдений."""

@@ -15,6 +15,7 @@ from agropulse.schemas.analysis import (
     AnomalyRead,
     ForecastRead,
     ProjectSummary,
+    RadarSeries,
     RiskRead,
 )
 
@@ -25,6 +26,16 @@ router = APIRouter(tags=["analysis"])
 def read_anomalies(field_id: uuid.UUID, service: AnalysisServiceDep) -> list[AnomalyRead]:
     """Аномальные периоды поля, самые тяжёлые первыми."""
     return [AnomalyRead.model_validate(anomaly) for anomaly in service.anomalies(field_id)]
+
+
+@router.get("/fields/{field_id}/radar", response_model=RadarSeries)
+def read_radar(field_id: uuid.UUID, service: AnalysisServiceDep) -> RadarSeries:
+    """Радарный ряд Sentinel-1 и резкие изменения в нём.
+
+    Пустой ряд — штатный ответ: радар мог быть недоступен на момент сбора,
+    а поле могло быть посчитано до появления этого источника.
+    """
+    return RadarSeries.model_validate(service.radar(field_id), from_attributes=True)
 
 
 @router.get("/fields/{field_id}/risk", response_model=RiskRead)

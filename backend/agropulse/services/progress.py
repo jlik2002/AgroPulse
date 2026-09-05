@@ -36,6 +36,7 @@ STAGE_TITLES: dict[PipelineStage, str] = {
     PipelineStage.SEARCH_SCENES: "Поиск спутниковых сцен",
     PipelineStage.CLOUD_MASKING: "Фильтрация облаков и теней",
     PipelineStage.INDICES: "Расчёт индексов",
+    PipelineStage.RADAR: "Радарная съёмка Sentinel-1",
     PipelineStage.WEATHER: "Получение погоды",
     PipelineStage.TIMESERIES: "Построение временного ряда",
     PipelineStage.GAP_FILLING: "Восстановление пропусков",
