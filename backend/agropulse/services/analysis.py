@@ -111,10 +111,12 @@ class RegistryRowView:
 class RegistryView:
     """Реестр приоритетной поддержки по всем хозяйствам проекта.
 
-    Три списка, а не один с сортировкой. Хозяйства без заключения нельзя
-    поставить в конец очереди: это прочиталось бы как «поддержка не нужна»,
-    тогда как сказать про них нечего. Поля без хозяйства не попадают ни в одну
-    строку реестра вовсе, и это видно, а не спрятано.
+    Списки разделены, а не отсортированы в один. Хозяйства без заключения
+    нельзя поставить в конец очереди: это прочиталось бы как «поддержка
+    не нужна», тогда как сказать про них нечего. Поля без хозяйства не попадают
+    ни в одну строку реестра вовсе, и это видно, а не спрятано. Хозяйства
+    справочника без полей в этом проекте перечислены отдельно — заведённое
+    хозяйство не должно выглядеть пропавшим.
     """
 
     project_id: uuid.UUID
@@ -122,6 +124,10 @@ class RegistryView:
     period_to: date
     rows: list[RegistryRowView] = dataclass_field(default_factory=list)
     undetermined: list[RegistryRowView] = dataclass_field(default_factory=list)
+    # Хозяйства справочника, у которых в этом проекте полей нет. Оценивать
+    # их здесь нечем, но и прятать нельзя: иначе заведённое хозяйство
+    # выглядит пропавшим.
+    other_farms: list[Farm] = dataclass_field(default_factory=list)
     unassigned_fields: list[FieldSummaryView] = dataclass_field(default_factory=list)
 
     @property
@@ -249,8 +255,14 @@ class AnalysisService:
             fields=_rank(summaries),
         )
 
-    def farm_summary(self, farm_id: uuid.UUID) -> FarmSummaryView:
-        """Хозяйство целиком: индекс потребности в поддержке и очередь его полей.
+    def farm_summary(self, project_id: uuid.UUID, farm_id: uuid.UUID) -> FarmSummaryView:
+        """Хозяйство внутри проекта: индекс потребности и очередь его полей.
+
+        Проект в адресе обязателен, хотя справочник хозяйств общий. Заключение
+        считается по периоду наблюдения, а он лежит на проекте: одно и то же
+        предприятие законно встречается в нескольких проектах с разными
+        периодами, и складывать такие поля в одну оценку значило бы сравнивать
+        ряды разной длины.
 
         Индекс считается здесь, а не хранится на строке хозяйства. Он полностью
         выводится из баллов полей, и отдельное хранение завело бы третье место,
@@ -260,11 +272,11 @@ class AnalysisService:
         farm = self._uow.farms.get(farm_id)
         if farm is None:
             raise FarmNotFoundError(farm_id=str(farm_id))
-        project = self._uow.projects.get(farm.project_id)
+        project = self._uow.projects.get(project_id)
         if project is None:
-            raise ProjectNotFoundError(project_id=str(farm.project_id))
+            raise ProjectNotFoundError(project_id=str(project_id))
 
-        fields = self._uow.fields.list_for_farm(farm_id)
+        fields = self._uow.fields.list_for_farm(farm_id, project_id)
         field_ids = [field.id for field in fields]
         anomalies_by_field = self._uow.anomalies.list_for_fields(field_ids)
         observations_by_field = self._uow.observations.list_for_fields(field_ids)
@@ -311,22 +323,26 @@ class AnalysisService:
         if project is None:
             raise ProjectNotFoundError(project_id=str(project_id))
 
-        farms = self._uow.farms.list_for_project(project_id)
+        farms = self._uow.farms.list_all()
         fields = self._uow.fields.list_for_project(project_id)
         anomalies_by_field = self._uow.anomalies.list_for_fields([f.id for f in fields])
         forecasts = self._uow.forecasts.get_for_fields([f.id for f in fields])
 
-        by_farm: dict[uuid.UUID, list[Field]] = {farm.id: [] for farm in farms}
+        known = {farm.id: farm for farm in farms}
+        by_farm: dict[uuid.UUID, list[Field]] = {}
         unassigned: list[Field] = []
         for field in fields:
-            if field.farm_id in by_farm:
-                by_farm[field.farm_id].append(field)
+            if field.farm_id in known:
+                by_farm.setdefault(field.farm_id, []).append(field)
             else:
                 unassigned.append(field)
 
+        # Справочник общий, поэтому в нём есть хозяйства, у которых в этом
+        # проекте полей нет. Оценивать их здесь нечем, и в реестр они не идут —
+        # но и молчать о них нельзя, иначе заведённое хозяйство «пропадает».
         rows = [
             RegistryRowView(
-                farm=farm,
+                farm=known[farm_id],
                 assessment=farm_module.assess(
                     [
                         farm_module.field_input(
@@ -334,12 +350,13 @@ class AnalysisService:
                             anomalies_by_field.get(field.id, []),
                             forecasts.get(field.id),
                         )
-                        for field in by_farm[farm.id]
+                        for field in farm_fields
                     ]
                 ),
             )
-            for farm in farms
+            for farm_id, farm_fields in by_farm.items()
         ]
+        other_farms = [farm for farm in farms if farm.id not in by_farm]
 
         # Заключение выдано — в очередь с номером; не выдано — в отдельный
         # список без номера. Смешивать их сортировкой нельзя: последнее место
@@ -363,6 +380,7 @@ class AnalysisService:
             period_to=project.period_to,
             rows=ranked,
             undetermined=undetermined,
+            other_farms=other_farms,
             unassigned_fields=[
                 _summarize_field(
                     field=field,

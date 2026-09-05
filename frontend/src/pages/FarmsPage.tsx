@@ -76,7 +76,10 @@ export function FarmsPage() {
   }
 
   const data = registry.data;
-  const empty = data.farms_total === 0;
+  // Пусто — когда справочник пуст вовсе. Хозяйство без полей в этом проекте
+  // пустым экраном не считается: оно заведено и должно быть видно.
+  const known = data.farms_total + data.other_farms.length;
+  const empty = known === 0;
 
   return (
     <div className="px-9 py-7">
@@ -86,8 +89,9 @@ export function FarmsPage() {
             Реестр приоритетной поддержки
           </h1>
           <p className="mt-1.5 text-[15px] text-ink-muted">
-            {data.farms_total} {farmsWord(data.farms_total)} · {formatArea(data.total_area_ha)} ·
-            наблюдение за {formatPeriod(data.period_from, data.period_to)}
+            {data.farms_total} {farmsWord(data.farms_total)} в этом проекте ·{" "}
+            {formatArea(data.total_area_ha)} · наблюдение за{" "}
+            {formatPeriod(data.period_from, data.period_to)}
           </p>
         </div>
 
@@ -135,7 +139,9 @@ export function FarmsPage() {
             }
           />
         </Card>
-      ) : (
+      ) : null}
+
+      {data.farms_total > 0 ? (
         <>
           <div className="mt-6 grid grid-cols-4 gap-4">
             <StatCard tone="danger" value={totals.urgent} label="Срочная проверка" />
@@ -216,7 +222,42 @@ export function FarmsPage() {
             </Card>
           ) : null}
         </>
-      )}
+      ) : null}
+
+      {data.other_farms.length > 0 ? (
+        <Card className="mt-4">
+          <CardHeader
+            title="Хозяйства без полей в этом проекте"
+            subtitle="Заведены в справочнике, но здесь по ним нечего оценивать"
+          />
+          <div className="px-5 pb-5 pt-1">
+            <Notice tone="info" icon={<Building2 size={16} />} className="mb-3">
+              Справочник хозяйств общий для всех проектов. Чтобы хозяйство попало
+              в этот реестр, добавьте ему поле на карте — оценка считается
+              по периоду наблюдения проекта.
+            </Notice>
+            <ul className="divide-y divide-line-soft">
+              {data.other_farms.map((farm) => (
+                <li key={farm.id} className="flex items-center gap-4 py-3">
+                  <Link
+                    to={`/p/${project.id}/farm/${farm.id}`}
+                    className="min-w-0 flex-1 truncate font-medium text-ink hover:text-brand-700"
+                  >
+                    {farm.name}
+                  </Link>
+                  <span className="shrink-0 text-[13.5px] text-ink-muted">
+                    {[farm.legal_form, farm.district].filter(Boolean).join(" · ") ||
+                      "реквизиты не указаны"}
+                  </span>
+                  <Button size="sm" variant="ghost" asChild>
+                    <Link to={`/p/${project.id}/fields`}>Добавить поле</Link>
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </Card>
+      ) : null}
 
       {data.unassigned_fields.length > 0 ? (
         <Card className="mt-4">

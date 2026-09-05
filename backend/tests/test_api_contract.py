@@ -235,11 +235,12 @@ def test_create_field_trims_crop(client, created_project, created_farm) -> None:
 
 
 def test_create_field_requires_farm(client, created_project, created_farm) -> None:
-    """Хозяйство обязательно, и оно должно принадлежать тому же проекту.
+    """Хозяйство обязательно и должно существовать.
 
     Поле без владельца не попадает ни в одну строку реестра — то есть просто
-    исчезает из государственного сценария. Поле, приписанное чужому хозяйству,
-    хуже: оно уехало бы в чужой период наблюдения и испортило чужой индекс.
+    исчезает из государственного сценария. Принадлежность проекту не проверяется:
+    справочник хозяйств общий, и одно предприятие законно встречается
+    в нескольких проектах.
     """
     missing = client.post(
         f"/api/projects/{created_project['id']}/fields",
@@ -247,21 +248,17 @@ def test_create_field_requires_farm(client, created_project, created_farm) -> No
     )
     assert missing.status_code == 422
 
-    other = client.post(
-        "/api/projects",
-        json={"name": "Чужой проект", "period_from": "2024-05-01", "period_to": "2024-08-31"},
-    ).json()
-    foreign = client.post(
-        f"/api/projects/{other['id']}/fields",
+    unknown = client.post(
+        f"/api/projects/{created_project['id']}/fields",
         json={
-            "name": "Поле чужого проекта",
+            "name": "Поле несуществующего хозяйства",
             "geometry": SQUARE_POLYGON,
-            "farm_id": created_farm["id"],
+            "farm_id": str(uuid.uuid4()),
             "crop": "Ячмень",
         },
     )
-    assert foreign.status_code == 404
-    assert foreign.json()["error"]["code"] == "farm_not_found"
+    assert unknown.status_code == 404
+    assert unknown.json()["error"]["code"] == "farm_not_found"
 
 
 def test_registry_separates_ranked_farms_from_fields_without_owner(
@@ -289,6 +286,7 @@ def test_registry_separates_ranked_farms_from_fields_without_owner(
     body = client.get(f"/api/projects/{created_project['id']}/registry").json()
 
     assert body["farms_total"] == 1
+    assert body["other_farms"] == []
     assert body["unassigned_fields"] == []
     assert body["rows"] == []
     assert len(body["undetermined"]) == 1

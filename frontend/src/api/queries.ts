@@ -40,9 +40,11 @@ export const keys = {
   risk: (id: string) => ["risk", id] as const,
   forecast: (id: string) => ["forecast", id] as const,
   summary: (projectId: string) => ["summary", projectId] as const,
-  farms: (projectId: string) => ["farms", projectId] as const,
+  // Справочник хозяйств общий, поэтому ключ без проекта.
+  farms: ["farms"] as const,
   farm: (id: string) => ["farm", id] as const,
-  farmSummary: (id: string) => ["farm-summary", id] as const,
+  farmSummary: (projectId: string, farmId: string) =>
+    ["farm-summary", projectId, farmId] as const,
   registry: (projectId: string) => ["registry", projectId] as const,
   farmReports: (id: string) => ["farm-reports", id] as const,
   projectReports: (projectId: string) => ["project-reports", projectId] as const,
@@ -200,11 +202,13 @@ export function useDeleteField(projectId: string) {
 
 // --- хозяйства ------------------------------------------------------------
 
-export function useFarms(projectId: string | undefined, options?: Options<Farm[]>) {
+/** Весь справочник хозяйств. Отбора по проекту нет намеренно: одно и то же
+ *  предприятие должно быть доступно из любого проекта, иначе его приходится
+ *  заводить заново под каждый период наблюдения. */
+export function useFarms(options?: Options<Farm[]>) {
   return useQuery({
-    queryKey: keys.farms(projectId ?? ""),
-    queryFn: () => request<Farm[]>(`/projects/${projectId}/farms`),
-    enabled: Boolean(projectId),
+    queryKey: keys.farms,
+    queryFn: () => request<Farm[]>("/farms"),
     ...options,
   });
 }
@@ -232,9 +236,9 @@ export function useCreateFarm(projectId: string) {
   const client = useQueryClient();
   return useMutation({
     mutationFn: (payload: FarmPayload) =>
-      request<Farm>(`/projects/${projectId}/farms`, { method: "POST", body: payload }),
+      request<Farm>("/farms", { method: "POST", body: payload }),
     onSuccess: () => {
-      client.invalidateQueries({ queryKey: keys.farms(projectId) });
+      client.invalidateQueries({ queryKey: keys.farms });
       client.invalidateQueries({ queryKey: keys.registry(projectId) });
     },
   });
@@ -247,9 +251,9 @@ export function useUpdateFarm(projectId: string) {
       request<Farm>(`/farms/${farmId}`, { method: "PATCH", body: payload }),
     onSuccess: (farm) => {
       client.setQueryData(keys.farm(farm.id), farm);
-      client.invalidateQueries({ queryKey: keys.farms(projectId) });
+      client.invalidateQueries({ queryKey: keys.farms });
       client.invalidateQueries({ queryKey: keys.registry(projectId) });
-      client.invalidateQueries({ queryKey: keys.farmSummary(farm.id) });
+      client.invalidateQueries({ queryKey: ["farm-summary"] });
     },
   });
 }
@@ -262,18 +266,25 @@ export function useDeleteFarm(projectId: string) {
     mutationFn: (farmId: string) =>
       request<{ orphaned_fields: number }>(`/farms/${farmId}`, { method: "DELETE" }),
     onSuccess: () => {
-      client.invalidateQueries({ queryKey: keys.farms(projectId) });
+      client.invalidateQueries({ queryKey: keys.farms });
       client.invalidateQueries({ queryKey: keys.fields(projectId) });
       client.invalidateQueries({ queryKey: keys.registry(projectId) });
     },
   });
 }
 
-export function useFarmSummary(farmId: string | undefined, options?: Options<FarmSummary>) {
+/** Заключение по хозяйству за период проекта. Проект в адресе обязателен:
+ *  справочник общий, а период наблюдения лежит на проекте. */
+export function useFarmSummary(
+  projectId: string | undefined,
+  farmId: string | undefined,
+  options?: Options<FarmSummary>,
+) {
   return useQuery({
-    queryKey: keys.farmSummary(farmId ?? ""),
-    queryFn: () => request<FarmSummary>(`/farms/${farmId}/summary`),
-    enabled: Boolean(farmId),
+    queryKey: keys.farmSummary(projectId ?? "", farmId ?? ""),
+    queryFn: () =>
+      request<FarmSummary>(`/projects/${projectId}/farms/${farmId}/summary`),
+    enabled: Boolean(projectId && farmId),
     ...options,
   });
 }

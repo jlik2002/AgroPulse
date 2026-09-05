@@ -101,8 +101,8 @@ class ReportService:
             media_type=CSV_MEDIA_TYPE,
         )
 
-    def farm_csv(self, farm_id: uuid.UUID) -> ReportDocument:
-        data = self._load_farm(farm_id)
+    def farm_csv(self, project_id: uuid.UUID, farm_id: uuid.UUID) -> ReportDocument:
+        data = self._load_farm(project_id, farm_id)
         return ReportDocument(
             filename=f"{data.farm.name}.csv",
             content=BOM + csv_export.export_fields(data.fields),
@@ -175,18 +175,20 @@ class ReportService:
             sections=document.sections,
         )
 
-    def farm_pdf(self, farm_id: uuid.UUID) -> ReportDocument:
-        """Заключение о состоянии угодий хозяйства."""
-        data = self._load_farm(farm_id)
+    def farm_pdf(self, project_id: uuid.UUID, farm_id: uuid.UUID) -> ReportDocument:
+        """Заключение о состоянии угодий хозяйства за период проекта."""
+        data = self._load_farm(project_id, farm_id)
         document = pdf.build_farm_report(data)
         filename = f"Заключение — {data.farm.name}.pdf"
         self._publish(
-            key=f"reports/farm/{farm_id}.pdf",
+            # Ключ включает проект: справочник хозяйств общий, и одно
+            # предприятие даёт разные заключения за разные периоды.
+            key=f"reports/farm/{project_id}-{farm_id}.pdf",
             document=document,
             kind=ReportKind.FARM,
             title=f"Заключение по хозяйству «{data.farm.name}»",
             filename=filename,
-            project_id=data.farm.project_id,
+            project_id=project_id,
             farm_id=data.farm.id,
             params={
                 "support_need_score": data.assessment.support_need_score,
@@ -258,15 +260,15 @@ class ReportService:
 
     # ------------------------------------------------------------------
 
-    def _load_farm(self, farm_id: uuid.UUID) -> FarmData:
+    def _load_farm(self, project_id: uuid.UUID, farm_id: uuid.UUID) -> FarmData:
         farm = self._uow.farms.get(farm_id)
         if farm is None:
             raise FarmNotFoundError(farm_id=str(farm_id))
-        project = self._uow.projects.get(farm.project_id)
+        project = self._uow.projects.get(project_id)
         if project is None:
-            raise ProjectNotFoundError(project_id=str(farm.project_id))
+            raise ProjectNotFoundError(project_id=str(project_id))
 
-        fields = self._uow.fields.list_for_farm(farm_id)
+        fields = self._uow.fields.list_for_farm(farm_id, project_id)
         field_ids = [field.id for field in fields]
         observations = self._uow.observations.list_for_fields(field_ids)
         radar = self._uow.radar.list_for_fields(field_ids)
@@ -309,33 +311,35 @@ class ReportService:
         if project is None:
             raise ProjectNotFoundError(project_id=str(project_id))
 
-        farms = self._uow.farms.list_for_project(project_id)
+        farms = {farm.id: farm for farm in self._uow.farms.list_all()}
         fields = self._uow.fields.list_for_project(project_id)
         field_ids = [field.id for field in fields]
         anomalies = self._uow.anomalies.list_for_fields(field_ids)
         forecasts = self._uow.forecasts.get_for_fields(field_ids)
 
-        by_farm: dict[uuid.UUID, list] = {farm.id: [] for farm in farms}
+        # В реестр идут только хозяйства с полями в этом проекте: у остальных
+        # период наблюдения другой, и оценивать их здесь нечем.
+        by_farm: dict[uuid.UUID, list] = {}
         unassigned = []
         for field in fields:
-            if field.farm_id in by_farm:
-                by_farm[field.farm_id].append(field)
+            if field.farm_id in farms:
+                by_farm.setdefault(field.farm_id, []).append(field)
             else:
                 unassigned.append(field)
 
         entries = [
             RegistryEntry(
-                farm=farm,
+                farm=farms[farm_id],
                 assessment=farm_analytics.assess(
                     [
                         farm_analytics.field_input(
                             field, anomalies.get(field.id, []), forecasts.get(field.id)
                         )
-                        for field in by_farm[farm.id]
+                        for field in farm_fields
                     ]
                 ),
             )
-            for farm in farms
+            for farm_id, farm_fields in by_farm.items()
         ]
 
         ranked = sorted(

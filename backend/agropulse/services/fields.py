@@ -101,7 +101,7 @@ class FieldService:
         источника контуров — различие сохраняется в поле `source`.
         """
         self._require_project(project_id)
-        self._require_farm(project_id, command.farm_id)
+        self._require_farm(command.farm_id)
         geometry, area_ha = validate_polygon(command.geometry)
 
         field = self._uow.fields.add(
@@ -149,7 +149,7 @@ class FieldService:
         field = self.get(field_id)
 
         if command.farm_id is not None and command.farm_id != field.farm_id:
-            self._require_farm(field.project_id, command.farm_id)
+            self._require_farm(command.farm_id)
 
         geometry_changed = command.geometry is not None
         # Сравниваем со значением в базе: повторная отправка той же культуры
@@ -279,16 +279,16 @@ class FieldService:
         if not self._uow.projects.exists(project_id):
             raise ProjectNotFoundError(project_id=str(project_id))
 
-    def _require_farm(self, project_id: uuid.UUID, farm_id: uuid.UUID) -> None:
-        """Хозяйство должно существовать и принадлежать тому же проекту.
+    def _require_farm(self, farm_id: uuid.UUID) -> None:
+        """Хозяйство должно существовать.
 
-        Тот же инвариант закреплён составным внешним ключом в схеме, но его
-        нарушение доехало бы до клиента пятисоткой от базы. Здесь оно
-        превращается в 404 с внятным кодом.
+        Проверки принадлежности проекту больше нет: справочник общий, и одно
+        предприятие законно встречается в нескольких проектах. Существование
+        проверяется здесь, а не внешним ключом, чтобы клиент получил 404
+        с внятным кодом, а не пятисотку от базы.
         """
-        farm = self._uow.farms.get(farm_id)
-        if farm is None or farm.project_id != project_id:
-            raise FarmNotFoundError(farm_id=str(farm_id), project_id=str(project_id))
+        if self._uow.farms.get(farm_id) is None:
+            raise FarmNotFoundError(farm_id=str(farm_id))
 
     def _reset_derived_data(self, field: Field) -> None:
         self._uow.observations.delete_for_field(field.id)

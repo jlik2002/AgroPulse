@@ -24,7 +24,6 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
-    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -163,9 +162,6 @@ class Project(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    farms: Mapped[list[Farm]] = relationship(
-        back_populates="project", cascade="all, delete-orphan"
-    )
     fields: Mapped[list[Field]] = relationship(
         back_populates="project", cascade="all, delete-orphan"
     )
@@ -182,11 +178,19 @@ class Farm(Base):
     по хозяйству целиком, а не по отдельному контуру, и реестр ранжирует
     хозяйства между собой.
 
-    Место в схеме выбрано из этого же: хозяйство внутри проекта, а не над ним.
-    Сравнивать хозяйства можно только на одном периоде наблюдения, иначе
-    разница в баллах окажется разницей в длине ряда, — а период уже лежит
-    на проекте и общий для всех его полей. Проект после этого читается как
-    ведомственный срез: один период, один реестр.
+    Справочник общий и не привязан к проекту. Хозяйство — объект реального
+    мира: его название, ИНН и район не зависят от того, за какой период мы
+    смотрели на его поля. Привязка к проекту делала одно и то же хозяйство
+    невидимым из соседнего проекта и заставляла заводить его заново на каждый
+    период наблюдения.
+
+    От периода зависит не хозяйство, а оценка. Поэтому сравнимость сохраняется
+    в другом месте: реестр строится по проекту и ранжирует только те хозяйства,
+    у которых есть поля в этом проекте, — а у всех его полей период общий.
+
+    Доступ соответствует остальной модели сервиса: регистрации нет, справочник
+    видят все. Ограничивать его владельцем бессмысленно там, где ссылка на
+    проект и так открывает его кому угодно.
 
     Реквизиты необязательны все до единого. В промышленном внедрении они
     приезжают из ведомственного реестра, а требовать ИНН у того, кто просто
@@ -196,9 +200,6 @@ class Farm(Base):
     __tablename__ = "farms"
 
     id: Mapped[uuid.UUID] = _uuid_pk()
-    project_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("projects.id", ondelete="CASCADE"), index=True
-    )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
 
     inn: Mapped[str | None] = mapped_column(String(12))
@@ -215,20 +216,12 @@ class Farm(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    project: Mapped[Project] = relationship(back_populates="farms")
-    fields: Mapped[list[Field]] = relationship(
-        back_populates="farm",
-        primaryjoin="Farm.id == Field.farm_id",
-        foreign_keys="Field.farm_id",
-        passive_deletes=True,
-    )
+    fields: Mapped[list[Field]] = relationship(back_populates="farm", passive_deletes=True)
 
     __table_args__ = (
-        # Реестр называет хозяйства по имени. Два одноимённых в одном проекте
-        # в нём неразличимы, и строка «Хозяйство №14» перестаёт быть адресом.
-        UniqueConstraint("project_id", "name", name="uq_farm_project_name"),
-        # Техническая: под составной внешний ключ из `fields`, см. там же.
-        UniqueConstraint("project_id", "id", name="uq_farm_project_identity"),
+        # Реестр называет хозяйства по имени. Два одноимённых в справочнике
+        # неразличимы, и строка «Хозяйство №14» перестаёт быть адресом.
+        UniqueConstraint("name", name="uq_farm_name"),
     )
 
 
@@ -246,7 +239,13 @@ class Field(Base):
     # до появления хозяйств, существуют, и приписать их выдуманному владельцу
     # значило бы записать в реестр то, чего никто не сообщал. Такие поля видны
     # в интерфейсе отдельной группой, а не спрятаны.
-    farm_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True)
+    #
+    # SET NULL, а не CASCADE: удаление хозяйства не должно уносить поля —
+    # вместе с ними ушли бы собранные наблюдения, а это часы обращений
+    # к Earth Engine и единственная копия исторического ряда.
+    farm_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("farms.id", ondelete="SET NULL"), index=True
+    )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
 
     # SRID 4326 — географические координаты, в них приходят и OSM, и рисунок пользователя.
@@ -283,11 +282,7 @@ class Field(Base):
     )
 
     project: Mapped[Project] = relationship(back_populates="fields")
-    farm: Mapped[Farm | None] = relationship(
-        back_populates="fields",
-        primaryjoin="Farm.id == Field.farm_id",
-        foreign_keys="Field.farm_id",
-    )
+    farm: Mapped[Farm | None] = relationship(back_populates="fields")
     radar_observations: Mapped[list[RadarObservation]] = relationship(
         back_populates="field", cascade="all, delete-orphan", passive_deletes=True
     )
@@ -303,21 +298,6 @@ class Field(Base):
         # только один путь записи. Данные приходят ещё и из batch-сценариев,
         # поэтому инвариант закреплён в базе.
         CheckConstraint("area_ha IS NULL OR area_ha > 0", name="ck_fields_area_positive"),
-        # Ключ составной, а не простой на `farms.id`: он запрещает приписать
-        # поле хозяйству из другого проекта. Такая запись не сломала бы ни одну
-        # проверку в Python, но испортила бы каждый реестр — площадь и балл
-        # уехали бы в чужой период наблюдения.
-        #
-        # `SET NULL (farm_id)` со списком колонок — синтаксис PostgreSQL 15+.
-        # Без него удаление хозяйства обнуляло бы и project_id, а он NOT NULL.
-        # Удалённое хозяйство не должно уносить с собой поля: вместе с ними
-        # ушли бы собранные наблюдения, а это часы обращений к Earth Engine.
-        ForeignKeyConstraint(
-            ["project_id", "farm_id"],
-            ["farms.project_id", "farms.id"],
-            name="fk_fields_farm",
-            ondelete="SET NULL (farm_id)",
-        ),
     )
 
 

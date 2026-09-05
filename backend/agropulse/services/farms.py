@@ -1,10 +1,13 @@
 """Сценарии работы с хозяйством.
 
-Здесь только жизненный цикл сущности: завести, переименовать, удалить,
-перенести поле. Всё, что считается по результатам анализа — индекс
-потребности в поддержке, реестр, достоверность — живёт в `AnalysisService`
-рядом со сводкой по проекту: это чтение производных данных, а не управление
-объектом.
+Здесь только жизненный цикл сущности: завести, переименовать, удалить.
+Справочник общий и проекту не принадлежит — хозяйство существует независимо
+от того, за какой период смотрели на его поля.
+
+Всё, что считается по результатам анализа — индекс потребности в поддержке,
+реестр, достоверность — живёт в `AnalysisService`. Там же появляется проект:
+заключение считается по полям хозяйства внутри одного проекта, потому что
+период наблюдения общий именно у полей проекта.
 """
 
 from __future__ import annotations
@@ -15,11 +18,7 @@ from dataclasses import dataclass
 
 from agropulse.db.models import Farm
 from agropulse.db.uow import UnitOfWork
-from agropulse.errors import (
-    DuplicateFarmNameError,
-    FarmNotFoundError,
-    ProjectNotFoundError,
-)
+from agropulse.errors import DuplicateFarmNameError, FarmNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -57,14 +56,12 @@ class FarmService:
     def __init__(self, uow: UnitOfWork) -> None:
         self._uow = uow
 
-    def create(self, project_id: uuid.UUID, command: CreateFarmCommand) -> Farm:
-        self._require_project(project_id)
-        if self._uow.farms.find_by_name(project_id, command.name) is not None:
-            raise DuplicateFarmNameError(project_id=str(project_id), name=command.name)
+    def create(self, command: CreateFarmCommand) -> Farm:
+        if self._uow.farms.find_by_name(command.name) is not None:
+            raise DuplicateFarmNameError(name=command.name)
 
         farm = self._uow.farms.add(
             Farm(
-                project_id=project_id,
                 name=command.name,
                 inn=command.inn,
                 legal_form=command.legal_form,
@@ -75,14 +72,17 @@ class FarmService:
             )
         )
         self._uow.commit()
-        logger.info(
-            "farm_created", extra={"farm_id": str(farm.id), "project_id": str(project_id)}
-        )
+        logger.info("farm_created", extra={"farm_id": str(farm.id)})
         return farm
 
-    def list_for_project(self, project_id: uuid.UUID) -> list[Farm]:
-        self._require_project(project_id)
-        return self._uow.farms.list_for_project(project_id)
+    def list_all(self) -> list[Farm]:
+        """Весь справочник. Отбора по проекту нет намеренно.
+
+        Хозяйство, заведённое в одном проекте, должно быть доступно в другом:
+        иначе одно и то же предприятие приходится создавать заново под каждый
+        период наблюдения, и в реестре оно двоится.
+        """
+        return self._uow.farms.list_all()
 
     def get(self, farm_id: uuid.UUID) -> Farm:
         farm = self._uow.farms.get(farm_id)
@@ -94,11 +94,8 @@ class FarmService:
         farm = self.get(farm_id)
 
         if command.name is not None and command.name != farm.name:
-            taken = self._uow.farms.find_by_name(farm.project_id, command.name)
-            if taken is not None:
-                raise DuplicateFarmNameError(
-                    project_id=str(farm.project_id), name=command.name
-                )
+            if self._uow.farms.find_by_name(command.name) is not None:
+                raise DuplicateFarmNameError(name=command.name)
             farm.name = command.name
 
         for attribute in _DETAILS:
@@ -117,14 +114,15 @@ class FarmService:
         """Удалить хозяйство. Поля остаются и теряют владельца.
 
         Возвращает число осиротевших полей — интерфейс предупреждает о нём
-        до удаления. Каскад здесь был бы разрушительным: вместе с полями
-        ушли бы собранные наблюдения, а это часы обращений к Earth Engine
-        и единственная копия исторического ряда.
+        до удаления. Справочник общий, поэтому осиротеть могут поля сразу
+        нескольких проектов, и число относится ко всем. Каскад здесь был бы
+        разрушительным: вместе с полями ушли бы собранные наблюдения, а это
+        часы обращений к Earth Engine и единственная копия ряда.
 
         Ссылка снимается явно, хотя её сняла бы и база: внешний ключ объявлен
-        с `ON DELETE SET NULL (farm_id)`. Дублирование намеренное — сессия
-        живёт с `expire_on_commit=False`, и уже прочитанные поля иначе
-        остались бы в памяти с указателем на удалённое хозяйство.
+        с `ON DELETE SET NULL`. Дублирование намеренное — сессия живёт
+        с `expire_on_commit=False`, и уже прочитанные поля иначе остались бы
+        в памяти с указателем на удалённое хозяйство.
         """
         farm = self.get(farm_id)
         orphaned = self._uow.fields.list_for_farm(farm_id)
@@ -137,19 +135,3 @@ class FarmService:
             "farm_deleted", extra={"farm_id": str(farm_id), "orphaned_fields": len(orphaned)}
         )
         return len(orphaned)
-
-    def require_in_project(self, project_id: uuid.UUID, farm_id: uuid.UUID) -> Farm:
-        """Проверить, что хозяйство принадлежит проекту.
-
-        Вызывается перед привязкой поля. Тот же инвариант закреплён составным
-        внешним ключом в схеме, но нарушение внешнего ключа доедет до клиента
-        пятисоткой, а сюда — понятной ошибкой «хозяйство не найдено».
-        """
-        farm = self.get(farm_id)
-        if farm.project_id != project_id:
-            raise FarmNotFoundError(farm_id=str(farm_id), project_id=str(project_id))
-        return farm
-
-    def _require_project(self, project_id: uuid.UUID) -> None:
-        if not self._uow.projects.exists(project_id):
-            raise ProjectNotFoundError(project_id=str(project_id))

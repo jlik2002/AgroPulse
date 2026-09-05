@@ -139,7 +139,7 @@ export function ReportsPage() {
   const [error, setError] = useState<unknown>(null);
 
   const fieldId = chosenField ?? params.get("field") ?? fields[0]?.id ?? "";
-  const farms = useFarms(project.id);
+  const farms = useFarms();
   const farmId = chosenFarm ?? params.get("farm") ?? farms.data?.[0]?.id ?? "";
   // Ряд нужен ровно для одного — прикинуть, во сколько страниц выльется
   // полная таблица значений. Остальные результаты поля здесь не читаются:
@@ -202,7 +202,7 @@ export function ReportsPage() {
         kind === "field"
           ? `/fields/${fieldId}/report.pdf`
           : kind === "farm"
-            ? `/farms/${farmId}/report.pdf`
+            ? `/projects/${project.id}/farms/${farmId}/report.pdf`
             : kind === "registry"
               ? `/projects/${project.id}/registry.pdf`
               : `/projects/${project.id}/report.pdf`;

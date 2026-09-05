@@ -37,12 +37,20 @@ class FieldRepository:
             ).all()
         )
 
-    def list_for_farm(self, farm_id: uuid.UUID) -> list[Field]:
-        return list(
-            self._session.scalars(
-                select(Field).where(Field.farm_id == farm_id).order_by(Field.created_at)
-            ).all()
-        )
+    def list_for_farm(
+        self, farm_id: uuid.UUID, project_id: uuid.UUID | None = None
+    ) -> list[Field]:
+        """Поля хозяйства, при необходимости — только внутри одного проекта.
+
+        Отбор по проекту нужен всюду, где считается заключение: справочник
+        хозяйств общий, и одно хозяйство может встречаться в нескольких
+        проектах с разными периодами наблюдения. Складывать такие поля в одну
+        оценку значило бы сравнивать ряды разной длины.
+        """
+        statement = select(Field).where(Field.farm_id == farm_id)
+        if project_id is not None:
+            statement = statement.where(Field.project_id == project_id)
+        return list(self._session.scalars(statement.order_by(Field.created_at)).all())
 
     def add(self, field: Field) -> Field:
         self._session.add(field)

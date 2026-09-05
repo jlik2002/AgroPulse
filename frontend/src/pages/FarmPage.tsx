@@ -52,7 +52,7 @@ export function FarmPage() {
   const { farmId = "" } = useParams();
   const { project, fields, indexOf } = useProjectContext();
 
-  const summary = useFarmSummary(farmId);
+  const summary = useFarmSummary(project.id, farmId);
   const reports = useFarmReports(farmId);
   const updateFarm = useUpdateFarm(project.id);
   const deleteFarm = useDeleteFarm(project.id);
@@ -131,7 +131,7 @@ export function FarmPage() {
           <Button
             variant="outline"
             size="lg"
-            onClick={() => void build(`/farms/${farm.id}/export.csv`)}
+            onClick={() => void build(`/projects/${project.id}/farms/${farm.id}/export.csv`)}
             disabled={building || farmFields.length === 0}
           >
             <Download size={17} />
@@ -139,7 +139,7 @@ export function FarmPage() {
           </Button>
           <Button
             size="lg"
-            onClick={() => void build(`/farms/${farm.id}/report.pdf`)}
+            onClick={() => void build(`/projects/${project.id}/farms/${farm.id}/report.pdf`)}
             disabled={building || farmFields.length === 0}
           >
             <FileText size={18} />

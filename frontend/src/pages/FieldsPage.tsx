@@ -55,7 +55,7 @@ export function FieldsPage() {
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [map, setMap] = useState<LeafletMap | null>(null);
 
-  const farms = useFarms(project.id);
+  const farms = useFarms();
   const createFarm = useCreateFarm(project.id);
   const createField = useCreateField(project.id);
   const updateField = useUpdateField(project.id);

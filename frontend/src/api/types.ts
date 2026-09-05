@@ -33,10 +33,11 @@ export interface Project {
 }
 
 /** Хозяйство — сельхозпроизводитель, которому принадлежат поля.
- *  Единица решения о поддержке: реестр ранжирует хозяйства, а не контуры. */
+ *  Единица решения о поддержке: реестр ранжирует хозяйства, а не контуры.
+ *  Справочник общий и проекту не принадлежит — заведённое однажды хозяйство
+ *  доступно из любого проекта. */
 export interface Farm {
   id: string;
-  project_id: string;
   name: string;
   inn: string | null;
   legal_form: string | null;
@@ -115,6 +116,8 @@ export interface Registry {
   total_area_ha: number;
   rows: RegistryRow[];
   undetermined: RegistryRow[];
+  /** Хозяйства справочника, у которых в этом проекте полей нет. */
+  other_farms: Farm[];
   /** Поля, не привязанные ни к одному хозяйству. В реестр не входят. */
   unassigned_fields: FieldSummary[];
 }

@@ -198,7 +198,7 @@ def created_project(client, project_payload) -> dict:
 @pytest.fixture
 def created_farm(client, created_project) -> dict:
     response = client.post(
-        f"/api/projects/{created_project['id']}/farms",
+        "/api/farms",
         json={"name": "КФХ Тестовое", "district": "Тестовый район"},
     )
     assert response.status_code == 201, response.text

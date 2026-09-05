@@ -93,16 +93,24 @@ def export_project_pdf(
 # ----------------------------------------------------------------------
 
 
-@router.get("/farms/{farm_id}/export.csv")
-def export_farm_csv(farm_id: uuid.UUID, service: ReportServiceDep) -> Response:
-    """Временные ряды всех полей хозяйства в одном CSV."""
-    return _as_response(service.farm_csv(farm_id))
+@router.get("/projects/{project_id}/farms/{farm_id}/export.csv")
+def export_farm_csv(
+    project_id: uuid.UUID, farm_id: uuid.UUID, service: ReportServiceDep
+) -> Response:
+    """Временные ряды полей хозяйства за период проекта, в одном CSV."""
+    return _as_response(service.farm_csv(project_id, farm_id))
 
 
-@router.get("/farms/{farm_id}/report.pdf")
-def export_farm_pdf(farm_id: uuid.UUID, service: ReportServiceDep) -> Response:
-    """Информационно-аналитическое заключение о состоянии угодий хозяйства."""
-    return _as_response(service.farm_pdf(farm_id))
+@router.get("/projects/{project_id}/farms/{farm_id}/report.pdf")
+def export_farm_pdf(
+    project_id: uuid.UUID, farm_id: uuid.UUID, service: ReportServiceDep
+) -> Response:
+    """Информационно-аналитическое заключение о состоянии угодий хозяйства.
+
+    Адресуется проектом: период наблюдения лежит на нём, и одно предприятие
+    даёт разные заключения за разные периоды.
+    """
+    return _as_response(service.farm_pdf(project_id, farm_id))
 
 
 @router.get("/projects/{project_id}/registry.csv")

@@ -75,7 +75,6 @@ class FarmRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    project_id: uuid.UUID
     name: str
     inn: str | None
     legal_form: str | None
@@ -197,10 +196,12 @@ class RegistryRow(BaseModel):
 class RegistryRead(BaseModel):
     """Реестр приоритетной государственной поддержки.
 
-    Три списка вместо одного отсортированного. Хозяйство без заключения
+    Списки разделены, а не слиты сортировкой. Хозяйство без заключения
     не ставится в конец очереди: последнее место читается как «поддержка
     не нужна», а сказать про него нечего. Поля без хозяйства не попадают
-    в реестр вовсе, и этот факт виден, а не спрятан.
+    в реестр вовсе, и этот факт виден, а не спрятан. Справочник хозяйств
+    общий, поэтому те из них, у кого в этом проекте полей нет, перечислены
+    отдельно — заведённое хозяйство не должно выглядеть пропавшим.
     """
 
     project_id: uuid.UUID
@@ -210,6 +211,8 @@ class RegistryRead(BaseModel):
     total_area_ha: float
     rows: list[RegistryRow]
     undetermined: list[RegistryRow]
+    # Хозяйства справочника, у которых в этом проекте полей нет.
+    other_farms: list[FarmRead]
     unassigned_fields: list[FieldSummary]
 
     @classmethod
@@ -222,6 +225,7 @@ class RegistryRead(BaseModel):
             total_area_ha=view.total_area_ha,
             rows=[RegistryRow.from_view(row) for row in view.rows],
             undetermined=[RegistryRow.from_view(row) for row in view.undetermined],
+            other_farms=[FarmRead.model_validate(farm) for farm in view.other_farms],
             unassigned_fields=[
                 FieldSummary.model_validate(item) for item in view.unassigned_fields
             ],

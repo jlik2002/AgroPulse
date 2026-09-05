@@ -1,4 +1,9 @@
-"""Хранение хозяйств."""
+"""Хранение хозяйств.
+
+Справочник общий: хозяйство не принадлежит проекту, потому что его название,
+ИНН и район не зависят от периода наблюдения. Отбор по проекту происходит
+не здесь, а там, где считается заключение, — через поля хозяйства.
+"""
 
 from __future__ import annotations
 
@@ -17,28 +22,22 @@ class FarmRepository:
     def get(self, farm_id: uuid.UUID) -> Farm | None:
         return self._session.get(Farm, farm_id)
 
-    def list_for_project(self, project_id: uuid.UUID) -> list[Farm]:
-        """Хозяйства проекта в алфавитном порядке.
+    def list_all(self) -> list[Farm]:
+        """Весь справочник по алфавиту.
 
-        Порядок по названию, а не по дате создания: реестр ранжирует
-        хозяйства сам, а всюду, где показывается просто список — выбор
-        хозяйства для поля, фильтр — человек ищет глазами по имени.
+        Порядок по названию, а не по дате создания: реестр ранжирует хозяйства
+        сам, а там, где показывается просто список — выбор хозяйства для поля,
+        фильтр — человек ищет глазами по имени.
         """
-        return list(
-            self._session.scalars(
-                select(Farm).where(Farm.project_id == project_id).order_by(Farm.name)
-            ).all()
-        )
+        return list(self._session.scalars(select(Farm).order_by(Farm.name)).all())
 
-    def find_by_name(self, project_id: uuid.UUID, name: str) -> Farm | None:
-        """Хозяйство с таким названием в проекте.
+    def find_by_name(self, name: str) -> Farm | None:
+        """Хозяйство с таким названием.
 
         Нужно, чтобы вернуть человеку внятную ошибку вместо нарушения
         уникального ключа: имя вводится руками, и совпадение — обычное дело.
         """
-        return self._session.scalar(
-            select(Farm).where(Farm.project_id == project_id, Farm.name == name)
-        )
+        return self._session.scalar(select(Farm).where(Farm.name == name))
 
     def add(self, farm: Farm) -> Farm:
         self._session.add(farm)
