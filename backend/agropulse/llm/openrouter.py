@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Модель по умолчанию. Переопределяется переменной OPENROUTER_MODEL.
 # Слаг сверен со списком моделей OpenRouter.
-DEFAULT_MODEL = "z-ai/glm-5.3-flash"
+DEFAULT_MODEL = "qwen/qwen3.8-27b"
 
 REQUEST_TIMEOUT_SECONDS = 120.0
 

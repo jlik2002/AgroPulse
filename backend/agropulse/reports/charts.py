@@ -56,26 +56,34 @@ def ndvi_chart(
     for start, end in anomalies:
         axes.axvspan(start, end, color=COLOR_ANOMALY, alpha=0.12, zorder=0)
 
+    # Восстановленные значения показываются полыми маркерами, а не только
+    # пунктирной линией: линия прячется под соседними точками, и различить
+    # факт от расчёта становится невозможно. Продуктовое требование прямое —
+    # пользователь обязан видеть происхождение каждой точки.
     if restored:
         axes.plot(
             [d for d, _ in restored], [v for _, v in restored],
-            color=COLOR_RESTORED, linewidth=1.2, linestyle="--",
-            label="восстановленные", zorder=2,
+            color=COLOR_RESTORED, linewidth=1.0, linestyle="--", alpha=0.8, zorder=2,
+        )
+        axes.scatter(
+            [d for d, _ in restored], [v for _, v in restored],
+            facecolors="none", edgecolors=COLOR_RESTORED, s=14, linewidths=0.9,
+            label="восстановленные", zorder=3,
         )
     if observed:
         axes.plot(
             [d for d, _ in observed], [v for _, v in observed],
-            color=COLOR_OBSERVED, linewidth=1.0, alpha=0.5, zorder=3,
+            color=COLOR_OBSERVED, linewidth=0.8, alpha=0.35, zorder=4,
         )
         axes.scatter(
             [d for d, _ in observed], [v for _, v in observed],
-            color=COLOR_OBSERVED, s=18, label="наблюдения", zorder=4,
+            color=COLOR_OBSERVED, s=22, label="наблюдения", zorder=5,
         )
     if forecast:
         days = [item[0] for item in forecast]
         values = [item[1] for item in forecast]
-        axes.plot(days, values, color=COLOR_FORECAST, linewidth=1.6,
-                  linestyle=":", label="прогноз", zorder=3)
+        axes.plot(days, values, color=COLOR_FORECAST, linewidth=1.8,
+                  linestyle=":", marker="^", markersize=3.5, label="прогноз", zorder=5)
         lows = [item[2] for item in forecast]
         highs = [item[3] for item in forecast]
         if all(value is not None for value in lows + highs):
