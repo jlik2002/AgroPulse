@@ -19,8 +19,10 @@ from sqlalchemy.orm import Session
 from agropulse.db.session import create_session
 from agropulse.repositories import (
     AnomalyRepository,
+    FarmRepository,
     FieldRepository,
     ForecastRepository,
+    GeneratedReportRepository,
     JobRepository,
     ObservationRepository,
     ProjectRepository,
@@ -40,6 +42,7 @@ class UnitOfWork:
     def __init__(self, session: Session) -> None:
         self.session = session
         self.projects = ProjectRepository(session)
+        self.farms = FarmRepository(session)
         self.fields = FieldRepository(session)
         self.observations = ObservationRepository(session)
         self.radar = RadarObservationRepository(session)
@@ -47,6 +50,7 @@ class UnitOfWork:
         self.forecasts = ForecastRepository(session)
         self.jobs = JobRepository(session)
         self.raw_cache = RawCacheRepository(session)
+        self.reports = GeneratedReportRepository(session)
 
     def commit(self) -> None:
         self.session.commit()

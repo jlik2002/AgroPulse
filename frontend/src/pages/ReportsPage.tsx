@@ -22,7 +22,7 @@ import { Chip } from "@/components/ui/Chip";
 import { Segmented } from "@/components/ui/Segmented";
 import { Select } from "@/components/ui/Select";
 import { EmptyState, ErrorState, Notice, Spinner } from "@/components/ui/State";
-import { useTimeseries } from "@/api/queries";
+import { useFarms, useTimeseries } from "@/api/queries";
 import { cn } from "@/lib/cn";
 import {
   formatArea,
@@ -33,7 +33,10 @@ import {
   plural,
 } from "@/lib/format";
 
-type ReportKind = "field" | "project";
+/** Уровень адресата документа. Поле смотрит агроном, хозяйство — комиссия,
+ *  реестр — распорядитель средств; сводка по проекту остаётся очередью
+ *  на осмотр по всем полям сразу. */
+type ReportKind = "field" | "farm" | "project" | "registry";
 
 interface SectionOption {
   key: string;
@@ -66,15 +69,43 @@ const PROJECT_SECTIONS = [
   "Методика и ограничения",
 ];
 
+const FARM_SECTIONS = [
+  "Оценка и рекомендуемая форма реакции",
+  "Поля и площади",
+  "Отклонения: даты и подтверждение",
+  "Погодный фон",
+  "Прогноз на 14 дней",
+  "Проблемные поля подробнее",
+  "Методика и ограничения",
+];
+
+const REGISTRY_SECTIONS = [
+  "Итоги",
+  "Реестр по индексу потребности",
+  "Категории для рассмотрения комиссией",
+  "Хозяйства без заключения",
+  "Поля вне хозяйств",
+  "Методика и ограничения",
+];
+
 /** Подписи по ключам, которыми бэкенд размечает страницы готового документа.
  *  Часть разделов пользователь не выбирает — они есть в документе всегда. */
 const SECTION_LABELS: Record<string, string> = {
   ...Object.fromEntries(FIELD_SECTIONS.map((section) => [section.key, section.label])),
   methodology: "Методика и ограничения",
-  totals: "Итоги по проекту",
+  totals: "Итоги",
   queue: "Очередь на осмотр",
   uncertain: "Поля без надёжной оценки",
   details: "Проблемные поля подробнее",
+  verdict: "Оценка и рекомендуемая форма реакции",
+  fields: "Поля и площади",
+  anomalies: "Отклонения: даты и подтверждение",
+  weather: "Погодный фон",
+  forecast: "Прогноз на 14 дней",
+  registry: "Реестр по индексу потребности",
+  categories: "Категории для рассмотрения комиссией",
+  undetermined: "Хозяйства без заключения",
+  unassigned: "Поля вне хозяйств",
 };
 
 interface ReadyReport {
@@ -97,6 +128,7 @@ export function ReportsPage() {
   // Храним только явный выбор пользователя: список полей приезжает запросом,
   // и вычисленное один раз начальное значение осталось бы пустым навсегда.
   const [chosenField, setChosenField] = useState<string | null>(null);
+  const [chosenFarm, setChosenFarm] = useState<string | null>(null);
   const [client, setClient] = useState("");
   const [sections, setSections] = useState<string[]>(
     FIELD_SECTIONS.filter((section) => section.key !== "table").map((section) => section.key),
@@ -107,6 +139,8 @@ export function ReportsPage() {
   const [error, setError] = useState<unknown>(null);
 
   const fieldId = chosenField ?? params.get("field") ?? fields[0]?.id ?? "";
+  const farms = useFarms(project.id);
+  const farmId = chosenFarm ?? params.get("farm") ?? farms.data?.[0]?.id ?? "";
   // Ряд нужен ровно для одного — прикинуть, во сколько страниц выльется
   // полная таблица значений. Остальные результаты поля здесь не читаются:
   // документ собирает бэкенд, и повторять его на клиенте нечем.
@@ -134,14 +168,20 @@ export function ReportsPage() {
     const titles =
       kind === "project"
         ? PROJECT_SECTIONS
-        : FIELD_SECTIONS.filter((section) => sections.includes(section.key)).map(
-            (section) => section.label,
-          );
+        : kind === "farm"
+          ? FARM_SECTIONS
+          : kind === "registry"
+            ? REGISTRY_SECTIONS
+            : FIELD_SECTIONS.filter((section) => sections.includes(section.key)).map(
+                (section) => section.label,
+              );
     return titles.map((label) => ({ label, page: null as number | null }));
   }, [ready, kind, sections]);
 
   const estimatedPages = useMemo(() => {
     if (kind === "project") return Math.max(2, Math.ceil(fields.length / 6) + 2);
+    if (kind === "farm") return 3;
+    if (kind === "registry") return 2;
 
     const chosen = sections.filter((key) => key !== "table").length;
     const tablePages = sections.includes("table")
@@ -161,11 +201,19 @@ export function ReportsPage() {
       const path =
         kind === "field"
           ? `/fields/${fieldId}/report.pdf`
-          : `/projects/${project.id}/report.pdf`;
+          : kind === "farm"
+            ? `/farms/${farmId}/report.pdf`
+            : kind === "registry"
+              ? `/projects/${project.id}/registry.pdf`
+              : `/projects/${project.id}/report.pdf`;
       const query =
         kind === "field"
           ? { client: client || undefined, sections: sections.join(",") }
-          : { client: client || undefined };
+          : // Заключение по хозяйству берёт название из самой сущности:
+            // подписывать обложку вручную здесь больше нечем.
+            kind === "farm"
+            ? undefined
+            : { client: client || undefined };
 
       const result = await fetchBlob(path, query);
       setReady({
@@ -319,8 +367,10 @@ export function ReportsPage() {
                 className="w-full [&>button]:flex-1"
                 value={kind}
                 options={[
-                  { value: "field", label: "По одному полю" },
-                  { value: "project", label: "Сводный отчёт" },
+                  { value: "field", label: "Поле" },
+                  { value: "farm", label: "Хозяйство" },
+                  { value: "registry", label: "Реестр" },
+                  { value: "project", label: "Сводный" },
                 ]}
                 onChange={(value) => setKind(value as ReportKind)}
               />
@@ -340,13 +390,40 @@ export function ReportsPage() {
                 </>
               ) : null}
 
-              <Label>Клиент или хозяйство</Label>
-              <input
-                value={client}
-                onChange={(event) => setClient(event.target.value)}
-                placeholder="ООО «Северное»"
-                className="h-11 w-full rounded-xl border border-line px-3.5 text-[14px] text-ink outline-none transition-colors focus:border-brand-400"
-              />
+              {kind === "farm" ? (
+                <>
+                  <Label>Хозяйство</Label>
+                  <Select
+                    value={farmId}
+                    onChange={setChosenFarm}
+                    ariaLabel="Хозяйство отчёта"
+                    placeholder="Выберите хозяйство"
+                    options={(farms.data ?? []).map((farm) => ({
+                      value: farm.id,
+                      label: farm.name,
+                      hint: farm.district ?? undefined,
+                    }))}
+                  />
+                </>
+              ) : null}
+
+              {kind === "farm" ? null : (
+                <>
+                  <Label>
+                    {kind === "registry" ? "Ведомство или район" : "Клиент или хозяйство"}
+                  </Label>
+                  <input
+                    value={client}
+                    onChange={(event) => setClient(event.target.value)}
+                    placeholder={
+                      kind === "registry"
+                        ? "Министерство сельского хозяйства края"
+                        : "ООО «Северное»"
+                    }
+                    className="h-11 w-full rounded-xl border border-line px-3.5 text-[14px] text-ink outline-none transition-colors focus:border-brand-400"
+                  />
+                </>
+              )}
 
               <Label>Период отчёта</Label>
               <span className="flex h-11 items-center gap-2.5 rounded-xl border border-line bg-white px-3.5 text-[14px] text-ink">
@@ -377,7 +454,12 @@ export function ReportsPage() {
                 </div>
               ) : (
                 <ul className="space-y-2 text-[14px] text-ink-soft">
-                  {PROJECT_SECTIONS.map((title) => (
+                  {(kind === "farm"
+                    ? FARM_SECTIONS
+                    : kind === "registry"
+                      ? REGISTRY_SECTIONS
+                      : PROJECT_SECTIONS
+                  ).map((title) => (
                     <li key={title} className="flex items-center gap-2.5">
                       <Check size={15} className="text-brand-700" />
                       {title}
@@ -404,7 +486,12 @@ export function ReportsPage() {
                 size="lg"
                 block
                 className="mt-4"
-                disabled={building || (kind === "field" && !fieldId) || sections.length === 0}
+                disabled={
+                  building ||
+                  (kind === "field" && (!fieldId || sections.length === 0)) ||
+                  (kind === "farm" && !farmId) ||
+                  (kind === "registry" && (farms.data ?? []).length === 0)
+                }
                 onClick={build}
               >
                 {building ? <Spinner className="text-white" /> : <FileText size={18} />}

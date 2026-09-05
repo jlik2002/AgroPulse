@@ -10,7 +10,12 @@ from datetime import date
 
 from agropulse.db.models import Field, FieldSource, FieldStatus, Observation, ValueType
 from agropulse.db.uow import UnitOfWork
-from agropulse.errors import EmptyProjectError, FieldNotFoundError, ProjectNotFoundError
+from agropulse.errors import (
+    EmptyProjectError,
+    FarmNotFoundError,
+    FieldNotFoundError,
+    ProjectNotFoundError,
+)
 from agropulse.geometry import to_wkt_element, validate_polygon
 from agropulse.tasks.publisher import TaskPublisher
 
@@ -21,7 +26,8 @@ logger = logging.getLogger(__name__)
 class CreateFieldCommand:
     name: str
     geometry: dict
-    # Культура текущего сезона обязательна — см. `schemas/field.py`.
+    # Хозяйство и культура текущего сезона обязательны — см. `schemas/field.py`.
+    farm_id: uuid.UUID
     crop: str
     sowing_date: date | None = None
     source: FieldSource = FieldSource.DRAWN
@@ -32,6 +38,7 @@ class CreateFieldCommand:
 class UpdateFieldCommand:
     name: str | None = None
     geometry: dict | None = None
+    farm_id: uuid.UUID | None = None
     crop: str | None = None
     sowing_date: date | None = None
 
@@ -94,11 +101,13 @@ class FieldService:
         источника контуров — различие сохраняется в поле `source`.
         """
         self._require_project(project_id)
+        self._require_farm(project_id, command.farm_id)
         geometry, area_ha = validate_polygon(command.geometry)
 
         field = self._uow.fields.add(
             Field(
                 project_id=project_id,
+                farm_id=command.farm_id,
                 name=command.name,
                 geom=to_wkt_element(geometry),
                 area_ha=area_ha,
@@ -132,9 +141,15 @@ class FieldService:
         Engine. Раньше не делалось ни того, ни другого: пользователь указывал
         культуру, а отчёт оставался прежним.
 
-        Переименование поля на расчёт не влияет и ничего не запускает.
+        Переименование поля и перенос его в другое хозяйство на расчёт
+        не влияют и ничего не запускают: хозяйство не входит ни в один
+        показатель поля, оно определяет только, в чью строку реестра
+        сложится результат.
         """
         field = self.get(field_id)
+
+        if command.farm_id is not None and command.farm_id != field.farm_id:
+            self._require_farm(field.project_id, command.farm_id)
 
         geometry_changed = command.geometry is not None
         # Сравниваем со значением в базе: повторная отправка той же культуры
@@ -151,7 +166,7 @@ class FieldService:
             field.area_ha = area_ha
             self._reset_derived_data(field)
 
-        for attribute in ("name", "crop", "sowing_date"):
+        for attribute in ("name", "farm_id", "crop", "sowing_date"):
             value = getattr(command, attribute)
             if value is not None:
                 setattr(field, attribute, value)
@@ -263,6 +278,17 @@ class FieldService:
     def _require_project(self, project_id: uuid.UUID) -> None:
         if not self._uow.projects.exists(project_id):
             raise ProjectNotFoundError(project_id=str(project_id))
+
+    def _require_farm(self, project_id: uuid.UUID, farm_id: uuid.UUID) -> None:
+        """Хозяйство должно существовать и принадлежать тому же проекту.
+
+        Тот же инвариант закреплён составным внешним ключом в схеме, но его
+        нарушение доехало бы до клиента пятисоткой от базы. Здесь оно
+        превращается в 404 с внятным кодом.
+        """
+        farm = self._uow.farms.get(farm_id)
+        if farm is None or farm.project_id != project_id:
+            raise FarmNotFoundError(farm_id=str(farm_id), project_id=str(project_id))
 
     def _reset_derived_data(self, field: Field) -> None:
         self._uow.observations.delete_for_field(field.id)

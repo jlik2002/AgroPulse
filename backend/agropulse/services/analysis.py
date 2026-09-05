@@ -1,9 +1,12 @@
-"""Сценарии чтения результатов анализа: аномалии, риск, сводка по проекту.
+"""Сценарии чтения результатов анализа: аномалии, риск, сводка, реестр.
 
-Сводка — главный экран для руководителя: она отвечает на вопрос «какие поля
-проверить в первую очередь». Поэтому поля ранжируются по составному риску,
-а участки с недостаточными данными выносятся отдельно и искусственного балла
-не получают.
+Два уровня агрегации, и они отвечают на разные вопросы. Сводка по проекту —
+вопрос агронома «какие поля проверить в первую очередь». Реестр хозяйств —
+вопрос распорядителя средств «кого рассматривать первым»; там единицей
+решения становится хозяйство, потому что поддержка выдаётся ему, а не контуру.
+
+Общее у обоих одно правило: участок с недостаточными данными искусственного
+балла не получает и выносится отдельно. Выдуманная оценка выглядит как знание.
 """
 
 from __future__ import annotations
@@ -13,10 +16,13 @@ from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import date
 
+from agropulse.analytics import farm as farm_module
 from agropulse.analytics import radar as radar_module
+from agropulse.analytics.farm import FarmAssessment
 from agropulse.analytics.radar import RadarSample
 from agropulse.db.models import (
     Anomaly,
+    Farm,
     Field,
     FieldStatus,
     ForecastRun,
@@ -25,7 +31,7 @@ from agropulse.db.models import (
     ValueType,
 )
 from agropulse.db.uow import UnitOfWork
-from agropulse.errors import FieldNotFoundError, ProjectNotFoundError
+from agropulse.errors import FarmNotFoundError, FieldNotFoundError, ProjectNotFoundError
 
 
 @dataclass(slots=True)
@@ -79,6 +85,53 @@ class ProjectSummaryView:
     normal: int
     insufficient_data: int
     fields: list[FieldSummaryView] = dataclass_field(default_factory=list)
+
+
+@dataclass(slots=True)
+class FarmSummaryView:
+    """Хозяйство целиком: индекс, достоверность и его поля."""
+
+    farm: Farm
+    period_from: date
+    period_to: date
+    assessment: FarmAssessment
+    fields: list[FieldSummaryView] = dataclass_field(default_factory=list)
+
+
+@dataclass(slots=True)
+class RegistryRowView:
+    farm: Farm
+    assessment: FarmAssessment
+    # Место в очереди на рассмотрение. У хозяйства без заключения его нет:
+    # номер в реестре означает приоритет, а не порядок в списке.
+    rank: int | None = None
+
+
+@dataclass(slots=True)
+class RegistryView:
+    """Реестр приоритетной поддержки по всем хозяйствам проекта.
+
+    Три списка, а не один с сортировкой. Хозяйства без заключения нельзя
+    поставить в конец очереди: это прочиталось бы как «поддержка не нужна»,
+    тогда как сказать про них нечего. Поля без хозяйства не попадают ни в одну
+    строку реестра вовсе, и это видно, а не спрятано.
+    """
+
+    project_id: uuid.UUID
+    period_from: date
+    period_to: date
+    rows: list[RegistryRowView] = dataclass_field(default_factory=list)
+    undetermined: list[RegistryRowView] = dataclass_field(default_factory=list)
+    unassigned_fields: list[FieldSummaryView] = dataclass_field(default_factory=list)
+
+    @property
+    def farms_total(self) -> int:
+        return len(self.rows) + len(self.undetermined)
+
+    @property
+    def total_area_ha(self) -> float:
+        rows = self.rows + self.undetermined
+        return round(sum(row.assessment.total_area_ha for row in rows), 1)
 
 
 class AnalysisService:
@@ -184,17 +237,6 @@ class AnalysisService:
             for field in fields
         ]
 
-        # Ранжирование: сначала поля с рассчитанным риском по убыванию балла,
-        # следом — участки без достаточных данных, без номера в очереди.
-        ranked = sorted(
-            (summary for summary in summaries if summary.risk_score is not None),
-            key=lambda summary: summary.risk_score,
-            reverse=True,
-        )
-        for position, summary in enumerate(ranked, start=1):
-            summary.inspection_rank = position
-        without_risk = [summary for summary in summaries if summary.risk_score is None]
-
         return ProjectSummaryView(
             project_id=project.id,
             period_from=project.period_from,
@@ -204,7 +246,133 @@ class AnalysisService:
             attention=_count_status(summaries, FieldStatus.ATTENTION),
             normal=_count_status(summaries, FieldStatus.NORMAL),
             insufficient_data=_count_status(summaries, FieldStatus.INSUFFICIENT_DATA),
-            fields=ranked + without_risk,
+            fields=_rank(summaries),
+        )
+
+    def farm_summary(self, farm_id: uuid.UUID) -> FarmSummaryView:
+        """Хозяйство целиком: индекс потребности в поддержке и очередь его полей.
+
+        Индекс считается здесь, а не хранится на строке хозяйства. Он полностью
+        выводится из баллов полей, и отдельное хранение завело бы третье место,
+        где данные расходятся с расчётом, — при этом пересчитывать его дешевле,
+        чем инвалидировать.
+        """
+        farm = self._uow.farms.get(farm_id)
+        if farm is None:
+            raise FarmNotFoundError(farm_id=str(farm_id))
+        project = self._uow.projects.get(farm.project_id)
+        if project is None:
+            raise ProjectNotFoundError(project_id=str(farm.project_id))
+
+        fields = self._uow.fields.list_for_farm(farm_id)
+        field_ids = [field.id for field in fields]
+        anomalies_by_field = self._uow.anomalies.list_for_fields(field_ids)
+        observations_by_field = self._uow.observations.list_for_fields(field_ids)
+        forecasts = self._uow.forecasts.get_for_fields(field_ids)
+
+        summaries = _rank(
+            [
+                _summarize_field(
+                    field=field,
+                    anomalies=anomalies_by_field.get(field.id, []),
+                    observations=observations_by_field.get(field.id, []),
+                    period_from=project.period_from,
+                    period_to=project.period_to,
+                )
+                for field in fields
+            ]
+        )
+
+        assessment = farm_module.assess(
+            [
+                farm_module.field_input(
+                    field, anomalies_by_field.get(field.id, []), forecasts.get(field.id)
+                )
+                for field in fields
+            ]
+        )
+
+        return FarmSummaryView(
+            farm=farm,
+            period_from=project.period_from,
+            period_to=project.period_to,
+            assessment=assessment,
+            fields=summaries,
+        )
+
+    def project_registry(self, project_id: uuid.UUID) -> RegistryView:
+        """Реестр хозяйств проекта, ранжированный по потребности в поддержке.
+
+        Аномалии и прогнозы всех полей читаются двумя запросами. Наблюдения —
+        только по полям без хозяйства: в строке реестра их не видно, они нужны
+        лишь для того, чтобы объяснить каждое непривязанное поле по отдельности.
+        """
+        project = self._uow.projects.get(project_id)
+        if project is None:
+            raise ProjectNotFoundError(project_id=str(project_id))
+
+        farms = self._uow.farms.list_for_project(project_id)
+        fields = self._uow.fields.list_for_project(project_id)
+        anomalies_by_field = self._uow.anomalies.list_for_fields([f.id for f in fields])
+        forecasts = self._uow.forecasts.get_for_fields([f.id for f in fields])
+
+        by_farm: dict[uuid.UUID, list[Field]] = {farm.id: [] for farm in farms}
+        unassigned: list[Field] = []
+        for field in fields:
+            if field.farm_id in by_farm:
+                by_farm[field.farm_id].append(field)
+            else:
+                unassigned.append(field)
+
+        rows = [
+            RegistryRowView(
+                farm=farm,
+                assessment=farm_module.assess(
+                    [
+                        farm_module.field_input(
+                            field,
+                            anomalies_by_field.get(field.id, []),
+                            forecasts.get(field.id),
+                        )
+                        for field in by_farm[farm.id]
+                    ]
+                ),
+            )
+            for farm in farms
+        ]
+
+        # Заключение выдано — в очередь с номером; не выдано — в отдельный
+        # список без номера. Смешивать их сортировкой нельзя: последнее место
+        # в очереди читается как «проверять не нужно».
+        ranked = sorted(
+            (row for row in rows if row.assessment.support_need_score is not None
+             and row.assessment.category is not farm_module.ReviewCategory.UNDETERMINED),
+            key=lambda row: row.assessment.support_need_score or 0.0,
+            reverse=True,
+        )
+        for position, row in enumerate(ranked, start=1):
+            row.rank = position
+        undetermined = [row for row in rows if row.rank is None]
+
+        unassigned_observations = self._uow.observations.list_for_fields(
+            [field.id for field in unassigned]
+        )
+        return RegistryView(
+            project_id=project.id,
+            period_from=project.period_from,
+            period_to=project.period_to,
+            rows=ranked,
+            undetermined=undetermined,
+            unassigned_fields=[
+                _summarize_field(
+                    field=field,
+                    anomalies=anomalies_by_field.get(field.id, []),
+                    observations=unassigned_observations.get(field.id, []),
+                    period_from=project.period_from,
+                    period_to=project.period_to,
+                )
+                for field in unassigned
+            ],
         )
 
     def _require_field(self, field_id: uuid.UUID) -> Field:
@@ -247,3 +415,19 @@ def _summarize_field(
 
 def _count_status(summaries: list[FieldSummaryView], status: FieldStatus) -> int:
     return sum(1 for summary in summaries if summary.status == status)
+
+
+def _rank(summaries: list[FieldSummaryView]) -> list[FieldSummaryView]:
+    """Расставить поля по очереди на осмотр.
+
+    Сначала поля с рассчитанным риском по убыванию балла, следом — участки
+    без достаточных данных, без номера в очереди.
+    """
+    ranked = sorted(
+        (summary for summary in summaries if summary.risk_score is not None),
+        key=lambda summary: summary.risk_score or 0.0,
+        reverse=True,
+    )
+    for position, summary in enumerate(ranked, start=1):
+        summary.inspection_rank = position
+    return ranked + [summary for summary in summaries if summary.risk_score is None]

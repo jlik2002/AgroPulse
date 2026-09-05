@@ -37,6 +37,13 @@ class FieldRepository:
             ).all()
         )
 
+    def list_for_farm(self, farm_id: uuid.UUID) -> list[Field]:
+        return list(
+            self._session.scalars(
+                select(Field).where(Field.farm_id == farm_id).order_by(Field.created_at)
+            ).all()
+        )
+
     def add(self, field: Field) -> Field:
         self._session.add(field)
         self._session.flush()

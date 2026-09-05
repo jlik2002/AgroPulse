@@ -4,8 +4,10 @@ import { useCallback, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import {
+  useCreateFarm,
   useCreateField,
   useDeleteField,
+  useFarms,
   useSearchParcels,
   useStartProjectProcessing,
   useUpdateField,
@@ -53,6 +55,8 @@ export function FieldsPage() {
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [map, setMap] = useState<LeafletMap | null>(null);
 
+  const farms = useFarms(project.id);
+  const createFarm = useCreateFarm(project.id);
   const createField = useCreateField(project.id);
   const updateField = useUpdateField(project.id);
   const deleteField = useDeleteField(project.id);
@@ -121,6 +125,10 @@ export function FieldsPage() {
         // Тег культуры из открытого источника — подсказка, а не факт:
         // пользователь подтверждает или исправляет её в карточке.
         crop: options?.crop ?? null,
+        // Хозяйство подставляет сам диалог: если оно в проекте одно,
+        // выбирать не из чего.
+        farm_id: null,
+        new_farm_name: null,
         sowing_date: null,
       },
     });
@@ -145,6 +153,8 @@ export function FieldsPage() {
     : editingField
       ? {
           name: editingField.name,
+          farm_id: editingField.farm_id,
+          new_farm_name: null,
           crop: editingField.crop,
           sowing_date: editingField.sowing_date,
         }
@@ -156,30 +166,53 @@ export function FieldsPage() {
   };
 
   const submitDialog = (draft: FieldDraft) => {
-    if (pending) {
-      createField.mutate(
+    // Хозяйство могли завести прямо в карточке поля. Создаём его первым:
+    // поле без владельца бэкенд не примет, а бросать пользователя на
+    // отдельный экран посреди рисования контура — худший из вариантов.
+    const withFarm = (farmId: string) => {
+      if (pending) {
+        createField.mutate(
+          {
+            name: draft.name,
+            geometry: pending.geometry,
+            farm_id: farmId,
+            crop: draft.crop ?? "",
+            sowing_date: draft.sowing_date,
+            source: pending.source,
+            external_ref: pending.external_ref,
+          },
+          {
+            onSuccess: (field) => {
+              setActiveFieldId(field.id);
+              setPending(null);
+            },
+          },
+        );
+        return;
+      }
+      if (!editingField) return;
+      updateField.mutate(
         {
-          name: draft.name,
-          geometry: pending.geometry,
-          crop: draft.crop ?? "",
-          sowing_date: draft.sowing_date,
-          source: pending.source,
-          external_ref: pending.external_ref,
-        },
-        {
-          onSuccess: (field) => {
-            setActiveFieldId(field.id);
-            setPending(null);
+          fieldId: editingField.id,
+          payload: {
+            name: draft.name,
+            farm_id: farmId,
+            crop: draft.crop,
+            sowing_date: draft.sowing_date,
           },
         },
+        { onSuccess: () => setEditing(null) },
+      );
+    };
+
+    if (draft.new_farm_name) {
+      createFarm.mutate(
+        { name: draft.new_farm_name },
+        { onSuccess: (farm) => withFarm(farm.id) },
       );
       return;
     }
-    if (!editingField) return;
-    updateField.mutate(
-      { fieldId: editingField.id, payload: draft },
-      { onSuccess: () => setEditing(null) },
-    );
+    if (draft.farm_id) withFarm(draft.farm_id);
   };
 
   return (
@@ -379,9 +412,11 @@ export function FieldsPage() {
           </div>
 
           <Notice icon={<Info size={17} />} className="border-none bg-transparent px-0 py-0">
-            Культура текущего сезона указана
+            У каждого поля указаны хозяйство
             <br />
-            у каждого поля — по ней отличаем севооборот
+            и культура текущего сезона: по первому
+            <br />
+            строится реестр, по второй отличаем севооборот
           </Notice>
 
           <Button
@@ -401,11 +436,13 @@ export function FieldsPage() {
         onOpenChange={(open) => !open && closeDialog()}
         mode={pending ? "create" : "edit"}
         initial={dialogInitial}
-        saving={createField.isPending || updateField.isPending}
+        farms={farms.data ?? []}
+        saving={createFarm.isPending || createField.isPending || updateField.isPending}
         error={
-          pending
+          (createFarm.error as Error | null)?.message ??
+          (pending
             ? ((createField.error as Error | null)?.message ?? null)
-            : ((updateField.error as Error | null)?.message ?? null)
+            : ((updateField.error as Error | null)?.message ?? null))
         }
         onSubmit={submitDialog}
       />

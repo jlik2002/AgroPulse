@@ -20,6 +20,7 @@ from agropulse.api.middleware import RequestContextMiddleware
 from agropulse.api.routers import (
     analysis,
     events,
+    farms,
     fields,
     health,
     parcels,
@@ -89,7 +90,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Пробы живут вне префикса /api: их дёргает инфраструктура, а не клиент.
     app.include_router(health.router)
 
-    for router in (projects, fields, parcels, analysis, events, reports):
+    for router in (projects, farms, fields, parcels, analysis, events, reports):
         app.include_router(router.router, prefix=settings.api_prefix)
 
     return app

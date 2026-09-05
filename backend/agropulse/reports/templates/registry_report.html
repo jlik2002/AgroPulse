@@ -1,0 +1,154 @@
+<!-- Реестр приоритетной государственной поддержки. Документ для того, кто
+     распределяет ресурс: очередь рассмотрения, а не список должников. -->
+<html lang="ru">
+<head><meta charset="utf-8"><style>{{ css|safe }}</style></head>
+<body>
+
+<div class="cover">
+  <h1>Реестр приоритетной государственной поддержки</h1>
+  <div class="subtitle">сельскохозяйственных производителей</div>
+  <div class="meta">
+    {% if client %}{{ client }}<br>{% endif %}
+    Период наблюдения: {{ period_from }} — {{ period_to }}<br>
+    Хозяйств в реестре: {{ farms_total }}<br>
+    Общая площадь: {{ total_area_ha }} га<br>
+    Реестр сформирован: {{ generated_at }}
+  </div>
+</div>
+
+<h2 data-section="totals">Итоги</h2>
+<div class="kpi">
+  <div class="kpi-item">
+    <div class="kpi-value">{{ counts.urgent }}</div>
+    <div class="kpi-label">срочная проверка</div>
+  </div>
+  <div class="kpi-item">
+    <div class="kpi-value">{{ counts.support }}</div>
+    <div class="kpi-label">рассмотреть поддержку</div>
+  </div>
+  <div class="kpi-item">
+    <div class="kpi-value">{{ counts.clarify }}</div>
+    <div class="kpi-label">запросить сведения</div>
+  </div>
+  <div class="kpi-item">
+    <div class="kpi-value">{{ counts.undetermined }}</div>
+    <div class="kpi-label">без заключения</div>
+  </div>
+</div>
+<table>
+  <tr><th>Показатель</th><th>Значение</th></tr>
+  <tr><td>Площадь с подтверждённым угнетением</td><td class="num">{{ problem_area_ha }} га</td></tr>
+  <tr><td>Площадь в критическом состоянии</td><td class="num">{{ critical_area_ha }} га</td></tr>
+  <tr><td>Площадь без заключения</td><td class="num">{{ unassessed_area_ha }} га</td></tr>
+</table>
+
+<h2 data-section="registry">Реестр по индексу потребности в поддержке</h2>
+{% if rows %}
+<table class="registry">
+  <tr>
+    <th class="col-rank">Прио&shy;ритет</th>
+    <th class="col-farm">Хозяйство</th>
+    <th class="col-area">Площадь, га</th>
+    <th class="col-score">Индекс</th>
+    <th class="col-reason">Причина</th>
+    <th class="col-trust">Досто&shy;верность</th>
+    <th class="col-action">Предлагаемое действие</th>
+  </tr>
+  {% for row in rows %}
+  <tr>
+    <td class="num">{{ row.rank }}</td>
+    <td>{{ row.name }}{% if row.district %}<br><span class="muted">{{ row.district }}</span>{% endif %}</td>
+    <td class="num">{{ row.area_ha }}</td>
+    <td class="num">{{ row.score }}</td>
+    <td>{{ row.reason or "—" }}</td>
+    <td><span class="badge trust-{{ row.trust }}">{{ row.trust_title }}</span></td>
+    <td>{{ row.action }}</td>
+  </tr>
+  {% endfor %}
+</table>
+<p class="muted">
+  Индекс потребности в поддержке — средневзвешенный по площади риск полей
+  хозяйства с надбавками за долю критической и проблемной площади. Он выражает
+  приоритет рассмотрения, а не размер ущерба и не сумму помощи.
+</p>
+{% else %}
+<p>Ни по одному хозяйству заключение не сформировано.</p>
+{% endif %}
+
+<h2 data-section="categories">Категории для рассмотрения комиссией</h2>
+<table>
+  <tr><th>Категория</th><th>Спутниковая ситуация</th><th>Хозяйства</th></tr>
+  {% for group in categories %}
+  <tr>
+    <td><span class="badge cat-{{ group.key }}">{{ group.action }}</span></td>
+    <td>{{ group.title }}</td>
+    <td>{{ group.farms|join(", ") if group.farms else "—" }}</td>
+  </tr>
+  {% endfor %}
+</table>
+<div class="note">
+  Формулировка «рассмотреть в первоочередном порядке» не означает назначение
+  выплаты, а «плановое наблюдение» — отказ в ней. Спутниковые данные являются
+  основанием для рассмотрения хозяйства комиссией, а не решением по существу.
+</div>
+
+{% if undetermined %}
+<h2 data-section="undetermined">Хозяйства без заключения</h2>
+<p class="muted">
+  Этим хозяйствам индекс не выставлен. Поставить их в конец очереди нельзя:
+  последнее место читалось бы как «поддержка не нужна», тогда как данных
+  для вывода не хватает.
+</p>
+<table>
+  <tr><th>Хозяйство</th><th>Площадь, га</th><th>Полей</th><th>Оценено площади</th><th>Причина</th></tr>
+  {% for row in undetermined %}
+  <tr>
+    <td>{{ row.name }}</td>
+    <td class="num">{{ row.area_ha }}</td>
+    <td class="num">{{ row.fields_total }}</td>
+    <td class="num">{{ row.assessed_percent }}%</td>
+    <td>{{ row.note }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+{% if unassigned %}
+<h2 data-section="unassigned">Поля вне хозяйств</h2>
+<p class="muted">
+  Эти контуры не привязаны ни к одному хозяйству и в реестр не вошли.
+  Их площадь документом не покрыта.
+</p>
+<table>
+  <tr><th>Поле</th><th>Площадь, га</th><th>Культура</th><th>Состояние</th></tr>
+  {% for row in unassigned %}
+  <tr>
+    <td>{{ row.name }}</td>
+    <td class="num">{{ row.area_ha }}</td>
+    <td>{{ row.crop or "не указана" }}</td>
+    <td><span class="status status-{{ row.status }}">{{ row.status_title }}</span></td>
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+<h2 data-section="methodology">Методика и ограничения</h2>
+<p class="muted">
+  Состояние посевов оценено по снимкам Sentinel-2: NDVI считается как среднее
+  по пригодным пикселям внутри контура поля, облачность отфильтрована.
+  Ожидаемая динамика построена по собственной истории каждого поля
+  за предыдущие сезоны, отклонения от неё сверены с радаром Sentinel-1,
+  индексом влажности и погодой.
+</p>
+<p class="muted">
+  Хозяйства сравнимы между собой, потому что наблюдались в один период.
+  Поля с недостаточными данными в индекс не входят и не занижают его: их
+  площадь показана отдельно и понижает достоверность заключения.
+</p>
+<p class="muted">
+  Реестр является первичным дистанционным материалом для комиссии и не
+  заменяет обследование хозяйств. Причины отклонений являются гипотезами.
+</p>
+
+</body>
+</html>

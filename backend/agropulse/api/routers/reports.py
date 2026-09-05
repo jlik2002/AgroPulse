@@ -1,8 +1,12 @@
-"""Выгрузка результатов: CSV и PDF-отчёты.
+"""Выгрузка результатов: CSV и PDF-отчёты трёх уровней.
+
+Поле, хозяйство, реестр — три адресата, и путь документа называет того,
+кому он адресован. Отчёт по полю смотрит агроном, заключение по хозяйству —
+комиссия, реестр — распорядитель средств.
 
 Роутер занимается только HTTP: подбирает заголовки и отдаёт готовый документ.
-Сбор данных, рендер и сохранение в объектное хранилище выполняет
-`services/reports.py`.
+Сбор данных, рендер, сохранение в объектное хранилище и регистрацию документа
+выполняет `services/reports.py`.
 """
 
 import uuid
@@ -11,6 +15,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Query, Response
 
 from agropulse.api.deps import ReportServiceDep
+from agropulse.schemas.report import GeneratedReportRead
 from agropulse.services.reports import ReportDocument
 
 router = APIRouter(tags=["reports"])
@@ -81,3 +86,72 @@ def export_project_pdf(
 ) -> Response:
     """Сводный отчёт по хозяйству с очередью на осмотр."""
     return _as_response(service.project_pdf(project_id, client))
+
+
+# ----------------------------------------------------------------------
+# Хозяйство и реестр
+# ----------------------------------------------------------------------
+
+
+@router.get("/farms/{farm_id}/export.csv")
+def export_farm_csv(farm_id: uuid.UUID, service: ReportServiceDep) -> Response:
+    """Временные ряды всех полей хозяйства в одном CSV."""
+    return _as_response(service.farm_csv(farm_id))
+
+
+@router.get("/farms/{farm_id}/report.pdf")
+def export_farm_pdf(farm_id: uuid.UUID, service: ReportServiceDep) -> Response:
+    """Информационно-аналитическое заключение о состоянии угодий хозяйства."""
+    return _as_response(service.farm_pdf(farm_id))
+
+
+@router.get("/projects/{project_id}/registry.csv")
+def export_registry_csv(project_id: uuid.UUID, service: ReportServiceDep) -> Response:
+    """Реестр хозяйств в машинно-читаемом виде."""
+    return _as_response(service.registry_csv(project_id))
+
+
+@router.get("/projects/{project_id}/registry.pdf")
+def export_registry_pdf(
+    project_id: uuid.UUID, service: ReportServiceDep, client: str | None = CLIENT_QUERY
+) -> Response:
+    """Реестр приоритетной государственной поддержки сельхозпроизводителей."""
+    return _as_response(service.registry_pdf(project_id, client))
+
+
+# ----------------------------------------------------------------------
+# Ранее сформированные документы
+# ----------------------------------------------------------------------
+
+
+@router.get("/projects/{project_id}/reports", response_model=list[GeneratedReportRead])
+def list_project_reports(
+    project_id: uuid.UUID, service: ReportServiceDep
+) -> list[GeneratedReportRead]:
+    """Все документы проекта, свежие первыми."""
+    return [
+        GeneratedReportRead.model_validate(report)
+        for report in service.list_for_project(project_id)
+    ]
+
+
+@router.get("/farms/{farm_id}/reports", response_model=list[GeneratedReportRead])
+def list_farm_reports(
+    farm_id: uuid.UUID, service: ReportServiceDep
+) -> list[GeneratedReportRead]:
+    """Документы хозяйства: заключения по нему и отчёты по его полям."""
+    return [
+        GeneratedReportRead.model_validate(report)
+        for report in service.list_for_farm(farm_id)
+    ]
+
+
+@router.get("/reports/{report_id}/download")
+def download_report(report_id: uuid.UUID, service: ReportServiceDep) -> Response:
+    """Скачать ранее собранный документ.
+
+    Отдаётся сохранённый файл, а не пересобранный: если данные с тех пор
+    изменились, пересборка дала бы другой документ, и ссылка на «тот самый
+    отчёт» перестала бы значить что-либо.
+    """
+    return _as_response(service.download(report_id))

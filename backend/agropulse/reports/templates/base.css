@@ -33,8 +33,10 @@ table { width: 100%; border-collapse: collapse; margin: 2mm 0 3mm 0; font-size: 
    мелко — он и так выделен цветом. */
 table.queue { font-size: 8pt; table-layout: fixed; }
 table.queue th, table.queue td { padding: 1.2mm 1.2mm; word-wrap: break-word; }
+/* Сумма ширин ровно 100%: при 101% последняя колонка уезжала за поле
+   страницы и обрезалась. */
 table.queue .col-rank { width: 6%; }
-table.queue .col-name { width: 24%; }
+table.queue .col-name { width: 23%; }
 table.queue .col-area { width: 10%; }
 table.queue .col-crop { width: 14%; }
 table.queue .col-status { width: 20%; }
@@ -75,3 +77,39 @@ li { margin-bottom: 0.8mm; }
    блоков вроде «Погодный контекст». */
 h1, h2, h3, h4, h5, h6 { bookmark-level: none; }
 h2[data-section] { bookmark-level: 1; bookmark-label: attr(data-section); }
+
+/* --- Реестр приоритетной поддержки и заключение по хозяйству --- */
+
+/* Семь колонок в ширину A4: приоритет, хозяйство, площадь, индекс, причина,
+   достоверность, действие. Ширины заданы явно по той же причине, что
+   и в очереди на осмотр, — иначе причина переносит таблицу за поля страницы. */
+table.registry { font-size: 8pt; table-layout: fixed; }
+table.registry th, table.registry td { padding: 1.2mm 1.2mm; word-wrap: break-word; }
+table.registry .col-rank { width: 6%; }
+table.registry .col-farm { width: 21%; }
+table.registry .col-area { width: 10%; }
+table.registry .col-score { width: 8%; }
+table.registry .col-reason { width: 24%; }
+table.registry .col-trust { width: 12%; }
+table.registry .col-action { width: 19%; }
+
+.badge { display: inline-block; padding: 0.6mm 1.8mm; border-radius: 1mm;
+         font-size: 7.5pt; font-weight: bold; color: #fff; }
+.trust-high { background: #2e7d32; }
+.trust-medium { background: #ef6c00; }
+.trust-low { background: #757575; }
+
+.cat-urgent { background: #c62828; }
+.cat-support { background: #ef6c00; }
+.cat-clarify { background: #6a1b9a; }
+.cat-monitor { background: #2e7d32; }
+.cat-undetermined { background: #757575; }
+
+/* Шапка заключения: несколько крупных чисел, которые читаются до текста. */
+.kpi { display: flex; margin: 3mm 0 4mm 0; border: 0.2mm solid #d7e3d9;
+       border-radius: 1.5mm; }
+.kpi-item { flex: 1; padding: 3mm; border-right: 0.2mm solid #eceee9; }
+.kpi-item:last-child { border-right: none; }
+.kpi-value { font-size: 16pt; font-weight: bold; color: #14532d;
+             font-variant-numeric: tabular-nums; }
+.kpi-label { font-size: 8pt; color: #777; }

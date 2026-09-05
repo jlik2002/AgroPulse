@@ -61,8 +61,17 @@ export function ProjectLayout() {
   const base = `/p/${projectId}`;
   const hasFields = (fields.data ?? []).length > 0;
 
+  // Раздел «Хозяйства» — реестр приоритетной поддержки. Он поднят к полям,
+  // а не спрятан под сводку: в государственном сценарии это главный экран,
+  // а поле в нём — строка внутри хозяйства.
   const items: NavItem[] = [
     { to: `${base}/fields`, label: "Поля" },
+    {
+      to: `${base}/farms`,
+      label: "Хозяйства",
+      disabled: !hasFields,
+      title: "Реестр строится по хозяйствам, которым принадлежат поля",
+    },
     {
       to: `${base}/summary`,
       label: "Сводка",

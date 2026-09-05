@@ -21,6 +21,7 @@ from agropulse.config import Settings, get_settings
 from agropulse.db.session import get_db
 from agropulse.db.uow import UnitOfWork
 from agropulse.services.analysis import AnalysisService
+from agropulse.services.farms import FarmService
 from agropulse.services.fields import FieldService
 from agropulse.services.projects import ProjectService
 from agropulse.services.reports import ReportService
@@ -51,6 +52,10 @@ def get_project_service(uow: UnitOfWorkDep) -> ProjectService:
     return ProjectService(uow)
 
 
+def get_farm_service(uow: UnitOfWorkDep) -> FarmService:
+    return FarmService(uow)
+
+
 def get_field_service(uow: UnitOfWorkDep, publisher: TaskPublisherDep) -> FieldService:
     return FieldService(uow, publisher)
 
@@ -68,6 +73,7 @@ def get_territory_service() -> TerritoryService:
 
 
 ProjectServiceDep = Annotated[ProjectService, Depends(get_project_service)]
+FarmServiceDep = Annotated[FarmService, Depends(get_farm_service)]
 FieldServiceDep = Annotated[FieldService, Depends(get_field_service)]
 AnalysisServiceDep = Annotated[AnalysisService, Depends(get_analysis_service)]
 ReportServiceDep = Annotated[ReportService, Depends(get_report_service)]

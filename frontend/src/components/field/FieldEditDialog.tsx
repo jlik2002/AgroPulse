@@ -1,13 +1,24 @@
 import { Info } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import type { Farm } from "@/api/types";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
+import { Select } from "@/components/ui/Select";
 import { Notice } from "@/components/ui/State";
 import { CROPS } from "@/lib/crops";
 
+/** Значение селектора, означающее «завести хозяйство прямо здесь».
+ *  Отдельный экран ради одного поля ввода заставил бы бросить рисование
+ *  контура на полпути. */
+const NEW_FARM = "__new__";
+
 export interface FieldDraft {
   name: string;
+  /** Хозяйство-владелец. Обязательно, если не заводится новое. */
+  farm_id: string | null;
+  /** Название нового хозяйства. Родитель создаёт его перед полем. */
+  new_farm_name: string | null;
   crop: string | null;
   sowing_date: string | null;
 }
@@ -18,6 +29,7 @@ interface FieldEditDialogProps {
   /** Заготовка полей формы. При создании — из контура, при правке — из поля. */
   initial: FieldDraft | null;
   mode: "create" | "edit";
+  farms: Farm[];
   onSubmit: (draft: FieldDraft) => void;
   saving?: boolean;
   error?: string | null;
@@ -36,11 +48,18 @@ export function FieldEditDialog({
   onOpenChange,
   initial,
   mode,
+  farms,
   onSubmit,
   saving,
   error,
 }: FieldEditDialogProps) {
-  const [draft, setDraft] = useState<FieldDraft>({ name: "", crop: null, sowing_date: null });
+  const [draft, setDraft] = useState<FieldDraft>({
+    name: "",
+    farm_id: null,
+    new_farm_name: null,
+    crop: null,
+    sowing_date: null,
+  });
 
   // Заготовка применяется один раз на открытие. Сравнивать её по ссылке нельзя:
   // родитель собирает объект на каждом рендере, и форма затирала бы ввод
@@ -52,13 +71,21 @@ export function FieldEditDialog({
       return;
     }
     if (!filled.current && initial) {
-      setDraft(initial);
+      // Единственное хозяйство подставляется само: в проекте, где оно одно,
+      // выбор из списка длиной в один пункт — лишний клик на каждом поле.
+      const only = farms.length === 1 ? farms[0].id : null;
+      setDraft({ ...initial, farm_id: initial.farm_id ?? only });
       filled.current = true;
     }
-  }, [open, initial]);
+  }, [open, initial, farms]);
 
   const creating = mode === "create";
-  const canSave = draft.name.trim().length > 0 && (draft.crop ?? "").trim().length > 0;
+  const addingFarm = draft.farm_id === NEW_FARM;
+  const farmChosen = addingFarm
+    ? (draft.new_farm_name ?? "").trim().length > 0
+    : Boolean(draft.farm_id);
+  const canSave =
+    draft.name.trim().length > 0 && (draft.crop ?? "").trim().length > 0 && farmChosen;
 
   return (
     <Modal
@@ -79,6 +106,8 @@ export function FieldEditDialog({
                 ...draft,
                 name: draft.name.trim(),
                 crop: (draft.crop ?? "").trim() || null,
+                farm_id: addingFarm ? null : draft.farm_id,
+                new_farm_name: addingFarm ? (draft.new_farm_name ?? "").trim() : null,
               })
             }
           >
@@ -97,6 +126,43 @@ export function FieldEditDialog({
             placeholder="Северное поле"
           />
         </label>
+
+        <div>
+          <span className="mb-1.5 block text-[13px] text-ink-soft">
+            Хозяйство <span className="text-danger-ink">*</span>
+          </span>
+          <Select
+            value={draft.farm_id ?? ""}
+            options={[
+              ...farms.map((farm) => ({
+                value: farm.id,
+                label: farm.name,
+                hint: farm.district ?? undefined,
+              })),
+              { value: NEW_FARM, label: "Новое хозяйство…" },
+            ]}
+            onChange={(value) =>
+              setDraft((current) => ({
+                ...current,
+                farm_id: value,
+                new_farm_name: value === NEW_FARM ? (current.new_farm_name ?? "") : null,
+              }))
+            }
+            placeholder="Выберите хозяйство"
+            ariaLabel="Хозяйство"
+          />
+          {addingFarm ? (
+            <input
+              value={draft.new_farm_name ?? ""}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, new_farm_name: event.target.value }))
+              }
+              className="mt-2 h-11 w-full rounded-xl border border-line px-3.5 text-[14px] text-ink outline-none transition-colors focus:border-brand-400"
+              placeholder="Название хозяйства"
+              autoFocus
+            />
+          ) : null}
+        </div>
 
         <label className="block">
           <span className="mb-1.5 block text-[13px] text-ink-soft">
@@ -137,7 +203,8 @@ export function FieldEditDialog({
             прошлым сезонам, в которых культура могла быть другой. */}
         <Notice icon={<Info size={16} />}>
           Сезонная норма строится по прошлым годам этого же участка. Зная культуру текущего
-          сезона, мы отличаем севооборот от угнетения посевов.
+          сезона, мы отличаем севооборот от угнетения посевов. Хозяйство определяет, в чью
+          строку реестра поддержки сложится результат.
         </Notice>
 
         {error ? <p className="text-[13px] text-danger-ink">{error}</p> : null}

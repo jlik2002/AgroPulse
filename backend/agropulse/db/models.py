@@ -24,6 +24,7 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -110,6 +111,20 @@ class AssetKind(str, enum.Enum):
     NDMI = "ndmi"
 
 
+class ReportKind(str, enum.Enum):
+    """Вид сформированного документа.
+
+    Уровень адресата, а не шаблон: поле смотрит агроном, хозяйство — комиссия,
+    реестр — распорядитель средств. Из уровня следует и то, кому документ
+    принадлежит, и то, в каком списке он показывается.
+    """
+
+    FIELD = "field"        # аналитический отчёт по полю
+    FARM = "farm"          # заключение о состоянии угодий хозяйства
+    PROJECT = "project"    # сводка по всем полям проекта, очередь на осмотр
+    REGISTRY = "registry"  # реестр приоритетной поддержки по всем хозяйствам
+
+
 def _enum(py_enum: type[enum.Enum], name: str) -> Enum:
     return Enum(
         py_enum,
@@ -148,12 +163,72 @@ class Project(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
+    farms: Mapped[list[Farm]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
     fields: Mapped[list[Field]] = relationship(
         back_populates="project", cascade="all, delete-orphan"
     )
 
     __table_args__ = (
         CheckConstraint("period_to >= period_from", name="ck_projects_period_order"),
+    )
+
+
+class Farm(Base):
+    """Хозяйство — сельхозпроизводитель, которому принадлежат поля.
+
+    Появилось ради государственного сценария: решение о поддержке принимается
+    по хозяйству целиком, а не по отдельному контуру, и реестр ранжирует
+    хозяйства между собой.
+
+    Место в схеме выбрано из этого же: хозяйство внутри проекта, а не над ним.
+    Сравнивать хозяйства можно только на одном периоде наблюдения, иначе
+    разница в баллах окажется разницей в длине ряда, — а период уже лежит
+    на проекте и общий для всех его полей. Проект после этого читается как
+    ведомственный срез: один период, один реестр.
+
+    Реквизиты необязательны все до единого. В промышленном внедрении они
+    приезжают из ведомственного реестра, а требовать ИНН у того, кто просто
+    смотрит на свою землю, значит закрыть перед ним сервис.
+    """
+
+    __tablename__ = "farms"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+
+    inn: Mapped[str | None] = mapped_column(String(12))
+    legal_form: Mapped[str | None] = mapped_column(String(50))   # ИП, КФХ, ООО, СПК
+    # Муниципальный район. Ключ группировки для отчёта о распределении
+    # ресурсов между территориями; вводится вручную, пока не связан с геокодером.
+    district: Mapped[str | None] = mapped_column(String(200))
+    region: Mapped[str | None] = mapped_column(String(200))
+    contact: Mapped[str | None] = mapped_column(String(200))
+    note: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    project: Mapped[Project] = relationship(back_populates="farms")
+    fields: Mapped[list[Field]] = relationship(
+        back_populates="farm",
+        primaryjoin="Farm.id == Field.farm_id",
+        foreign_keys="Field.farm_id",
+        passive_deletes=True,
+    )
+
+    __table_args__ = (
+        # Реестр называет хозяйства по имени. Два одноимённых в одном проекте
+        # в нём неразличимы, и строка «Хозяйство №14» перестаёт быть адресом.
+        UniqueConstraint("project_id", "name", name="uq_farm_project_name"),
+        # Техническая: под составной внешний ключ из `fields`, см. там же.
+        UniqueConstraint("project_id", "id", name="uq_farm_project_identity"),
     )
 
 
@@ -166,6 +241,12 @@ class Field(Base):
     project_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"), index=True
     )
+    # Хозяйство, которому принадлежит поле. Обязательно при создании через API,
+    # но колонка nullable — по той же причине, что и у культуры: поля, заведённые
+    # до появления хозяйств, существуют, и приписать их выдуманному владельцу
+    # значило бы записать в реестр то, чего никто не сообщал. Такие поля видны
+    # в интерфейсе отдельной группой, а не спрятаны.
+    farm_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
 
     # SRID 4326 — географические координаты, в них приходят и OSM, и рисунок пользователя.
@@ -202,6 +283,11 @@ class Field(Base):
     )
 
     project: Mapped[Project] = relationship(back_populates="fields")
+    farm: Mapped[Farm | None] = relationship(
+        back_populates="fields",
+        primaryjoin="Farm.id == Field.farm_id",
+        foreign_keys="Field.farm_id",
+    )
     radar_observations: Mapped[list[RadarObservation]] = relationship(
         back_populates="field", cascade="all, delete-orphan", passive_deletes=True
     )
@@ -217,6 +303,21 @@ class Field(Base):
         # только один путь записи. Данные приходят ещё и из batch-сценариев,
         # поэтому инвариант закреплён в базе.
         CheckConstraint("area_ha IS NULL OR area_ha > 0", name="ck_fields_area_positive"),
+        # Ключ составной, а не простой на `farms.id`: он запрещает приписать
+        # поле хозяйству из другого проекта. Такая запись не сломала бы ни одну
+        # проверку в Python, но испортила бы каждый реестр — площадь и балл
+        # уехали бы в чужой период наблюдения.
+        #
+        # `SET NULL (farm_id)` со списком колонок — синтаксис PostgreSQL 15+.
+        # Без него удаление хозяйства обнуляло бы и project_id, а он NOT NULL.
+        # Удалённое хозяйство не должно уносить с собой поля: вместе с ними
+        # ушли бы собранные наблюдения, а это часы обращений к Earth Engine.
+        ForeignKeyConstraint(
+            ["project_id", "farm_id"],
+            ["farms.project_id", "farms.id"],
+            name="fk_fields_farm",
+            ondelete="SET NULL (farm_id)",
+        ),
     )
 
 
@@ -518,6 +619,56 @@ class SceneAsset(Base):
 
     __table_args__ = (
         UniqueConstraint("field_id", "date", "kind", name="uq_scene_asset_identity"),
+    )
+
+
+class GeneratedReport(Base):
+    """Сформированный документ: где лежит и по чему собран.
+
+    До появления хозяйств отчёт был действием — собрали и отдали в поток,
+    след оставался только объектом в хранилище с вычисляемым именем. Сценарию
+    комиссии этого мало: заключение по хозяйству живёт дальше момента
+    скачивания, на него ссылаются и его перечитывают, а значит у документа
+    появляются владелец, дата и место в списке.
+
+    Содержимое здесь не хранится — только ключ объекта в S3. Складывать PDF
+    в строку базы значило бы возить мегабайты через каждый запрос списка.
+
+    Состав разделов лежит в `params`, потому что от него зависит документ:
+    два заключения по одному хозяйству с разным набором разделов — разные
+    файлы, и один не должен затирать другой.
+    """
+
+    __tablename__ = "generated_reports"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    # Адресат документа. Заполнено ровно одно из двух — либо ни одного,
+    # и тогда это реестр по всему проекту.
+    farm_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("farms.id", ondelete="CASCADE"), index=True
+    )
+    field_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("fields.id", ondelete="CASCADE"), index=True
+    )
+
+    kind: Mapped[ReportKind] = mapped_column(_enum(ReportKind, "report_kind"), nullable=False)
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    filename: Mapped[str] = mapped_column(String(300), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    params: Mapped[dict | None] = mapped_column(JSONB)
+    pages: Mapped[int | None] = mapped_column(Integer)
+    size_bytes: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        # Пересборка того же документа заменяет строку, а не плодит копии:
+        # ключ объекта в хранилище тот же, и вторая строка указывала бы
+        # на уже перезаписанный файл.
+        UniqueConstraint("storage_key", name="uq_generated_report_storage_key"),
+        Index("ix_generated_reports_project_created", "project_id", "created_at"),
     )
 
 
