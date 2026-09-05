@@ -21,7 +21,7 @@ import { Card, CardHeader } from "@/components/ui/Card";
 import { Chip } from "@/components/ui/Chip";
 import { EmptyState, ErrorState, Loading } from "@/components/ui/State";
 import { cn } from "@/lib/cn";
-import { corroborationOf, type CorroborationView } from "@/lib/corroboration";
+import { trustOf, type TrustView } from "@/lib/trust";
 import {
   formatArea,
   formatDateRangeShort,
@@ -261,12 +261,11 @@ function PriorityCard({
 }) {
   const style = statusOf(row.status);
   const anomaly = row.worst_anomaly;
-  // Подтверждённость относится к самому событию, а прежняя строка про
-  // качество данных — к сезону целиком. Разница не косметическая: у поля
-  // может быть отличное среднее покрытие за сезон и при этом аномалия,
-  // целиком собранная из восстановленных точек под сплошным облаком.
+  // Вердикт относится к самому событию, а прежняя строка про качество данных —
+  // к сезону целиком. Разница не косметическая: у поля может быть отличное
+  // среднее покрытие за сезон и при этом аномалия в наглухо закрытом окне.
   // Ровно так экран и рекомендовал ехать смотреть облако.
-  const trust = corroborationOf(anomaly);
+  const trust = trustOf(anomaly);
 
   const reason = anomaly
     ? `NDVI ниже нормы ${anomaly.duration_days} ${daysWord(anomaly.duration_days)} подряд`
@@ -321,10 +320,18 @@ function PriorityCard({
       <div className="mt-3.5 space-y-2">
         <p className="flex items-start gap-2.5 text-[14px] text-ink">
           <TrendingUp size={17} className={cn("mt-0.5 shrink-0", style.accent)} />
-          {reason}
+          <span>
+            {reason}
+            {trust?.level === "confirmed" ? (
+              <span className="text-ink-soft">, подтверждено независимым источником</span>
+            ) : null}
+          </span>
         </p>
         <div className="flex items-center gap-2.5">
-          {trust ? (
+          {/* Одна строка вместо трёх прежних. Подтверждённое событие
+              обходится пометкой в строке причины выше и места здесь
+              не занимает: ярлык, стоящий всегда, перестают читать. */}
+          {trust?.actionable ? (
             <TrustLine trust={trust} />
           ) : (
             <>
@@ -347,31 +354,21 @@ function PriorityCard({
             <Link to={href}>Открыть поле</Link>
           </Button>
         </div>
-
-        {/* Порядок в очереди не меняется: обосновать ранжирование по
-            подтверждённости пока нечем. Но предупредить перед выездом
-            обязаны — поездка стоит дороже, чем перепроверка данных. */}
-        {trust?.disputed ? (
-          <p className="flex items-start gap-2.5 rounded-xl bg-danger-tint px-3.5 py-2.5 text-[13.5px] leading-relaxed text-ink">
-            <TriangleAlert size={16} className="mt-0.5 shrink-0 text-danger" />
-            Радар в эти дни изменений не показывает. Проверьте исходные данные,
-            прежде чем планировать выезд.
-          </p>
-        ) : null}
       </div>
     </div>
   );
 }
 
-/** Строка подтверждённости в карточке очереди.
+/** Строка вердикта в карточке очереди.
  *
- *  Без пояснения рядом не показывается принципиально: одна короткая оценка
- *  без причины — это ещё один непонятный значок на экране, а не сигнал. */
-function TrustLine({ trust }: { trust: CorroborationView }) {
+ *  Показывается только когда вердикт меняет решение: расхождение с радаром
+ *  или невозможность проверить. Без пояснения рядом не показывается
+ *  принципиально — короткая оценка без причины это ещё один непонятный
+ *  значок на экране, а не сигнал. */
+function TrustLine({ trust }: { trust: TrustView }) {
   const icon = {
     good: <CircleCheck size={17} className="shrink-0 text-ok" />,
-    warn: <CircleAlert size={17} className="shrink-0 text-warn" />,
-    danger: <TriangleAlert size={17} className="shrink-0 text-danger" />,
+    warn: <TriangleAlert size={17} className="shrink-0 text-warn" />,
     muted: <CircleHelp size={17} className="shrink-0 text-ink-muted" />,
   }[trust.tone];
 

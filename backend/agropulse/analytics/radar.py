@@ -117,30 +117,6 @@ class RadarEvent:
     confirmed: bool = True
 
 
-# Вердикт радара по окну события.
-RADAR_AGREES = "agrees"        # радар показывает согласованное изменение
-RADAR_SILENT = "silent"        # снимки в окне есть, изменений не видно
-RADAR_NO_DATA = "no_data"      # снимков в окне нет, проверить нечем
-
-
-@dataclass(slots=True)
-class Corroboration:
-    """Подтверждённость события независимыми источниками."""
-
-    score: int
-    level: str
-    # Что именно сказал радар. Отдельно от балла, потому что низкий балл
-    # получается по двум совершенно разным причинам, и путать их опасно:
-    # «радар в окне есть и изменений не показывает» — повод усомниться
-    # в событии, «радарных снимков в окне нет» — повод усомниться только
-    # в собственной осведомлённости. Второе особенно важно не занижать:
-    # подтверждённость проседает от облачности, то есть ровно тогда,
-    # когда оптика слабее всего и смотреть надо больше, а не меньше.
-    radar_verdict: str = RADAR_NO_DATA
-    parts: dict[str, int] = dataclass_field(default_factory=dict)
-    notes: list[str] = dataclass_field(default_factory=list)
-
-
 # ---------------------------------------------------------------------------
 # Производные величины ряда
 # ---------------------------------------------------------------------------
@@ -312,134 +288,37 @@ def _confirmation(change: float, following: float | None) -> bool | None:
 
 
 # ---------------------------------------------------------------------------
-# Подтверждённость события
+# Вердикт радара по окну события
 # ---------------------------------------------------------------------------
 
-# Вклад каждого источника. Величины взяты как есть из принятой схемы оценки:
-# оптика весит больше радара, потому что напрямую измеряет состояние
-# растительности, а радар отвечает на смежный вопрос о структуре.
-WEIGHT_OPTICAL = 30
-WEIGHT_OPTICAL_RESTORED = 15
-WEIGHT_RADAR = 20
-WEIGHT_PERSISTENCE = 20
-WEIGHT_WEATHER = 20
-PENALTY_CLOUDS = -20
-PENALTY_MIXED_ORBIT = -20
-
-# Зарезервировано под пространственное совпадение аномалий в оптике и радаре.
-# Пока всегда ноль: попиксельный анализ не реализован, см. docs/PLAN.md.
-# Из-за этого достижимый максимум равен 90, а не 100, и это осознанно:
-# «идеально подтверждённого» события у нас пока не бывает.
-WEIGHT_SPATIAL = 10
-
-LEVEL_THRESHOLDS = ((70, "high"), (40, "possible"), (0, "weak"))
-
-# Доля восстановленных точек, выше которой событие считается скорее
-# дорисованным моделью, чем измеренным.
-MOSTLY_RESTORED = 0.5
-
-# Доля закрытой облаками площади, выше которой оптический ряд в окне
-# считается ненадёжным.
-HEAVY_CLOUD_FRACTION = 0.5
+# Вердикт радара по окну события.
+RADAR_AGREES = "agrees"        # радар показывает согласованное изменение
+RADAR_SILENT = "silent"        # снимки в окне есть, изменений не видно
+RADAR_NO_DATA = "no_data"      # снимков в окне нет, проверить нечем
 
 
-def corroborate(
+def verdict(
     *,
     start_date: date,
     end_date: date,
-    observed_points: int,
-    restored_fraction: float | None,
-    cloud_fraction: float | None,
-    weather_hypotheses: list[str],
     samples: list[RadarSample],
     events: list[RadarEvent] | None = None,
-) -> Corroboration:
-    """Оценить, насколько событие подтверждено независимыми источниками.
+) -> str:
+    """Что радар говорит о событии в этом окне.
 
-    Оценка отвечает на другой вопрос, нежели `confidence` аномалии. Там —
-    хватило ли данных, чтобы вообще посчитать событие. Здесь — сошлись ли
-    на нём разные способы измерения. Событие может быть надёжно измерено
-    одной оптикой и остаться неподтверждённым, и наоборот.
+    Три исхода, и разница между вторым и третьим принципиальна. «Снимки есть,
+    изменений не видно» — свидетельство против события. «Снимков нет» — не
+    свидетельство вообще: радарного покрытия не хватает независимо от того,
+    что происходило на поле, и понижать по этому доверие значит наказывать
+    вывод за пробелы в чужом каталоге.
     """
-    parts: dict[str, int] = {}
-    notes: list[str] = []
-
-    # --- оптика ---
-    if restored_fraction is not None and restored_fraction > MOSTLY_RESTORED:
-        parts["optical"] = WEIGHT_OPTICAL_RESTORED
-        notes.append(
-            f"больше половины точек периода ({restored_fraction:.0%}) восстановлены моделью, "
-            "а не измерены"
-        )
-    else:
-        parts["optical"] = WEIGHT_OPTICAL
-
-    # --- устойчивость во времени ---
-    if observed_points >= 2:
-        parts["persistence"] = WEIGHT_PERSISTENCE
-    else:
-        notes.append("событие опирается на одну измеренную точку оптического ряда")
-
-    # --- радар ---
     window = _window_samples(samples, start_date, end_date)
-    confirmation = _radar_confirmation(
-        samples, window, events or [], start_date, end_date
-    )
-    if confirmation is not None:
-        radar_verdict = RADAR_AGREES
-        parts["radar"] = WEIGHT_RADAR
-        notes.append(confirmation)
-    elif not window:
-        radar_verdict = RADAR_NO_DATA
-        notes.append("радарных снимков в окне события нет")
-    else:
-        radar_verdict = RADAR_SILENT
-        notes.append("радар согласованного изменения не показывает")
+    if not window:
+        return RADAR_NO_DATA
 
-    # --- погода ---
-    if weather_hypotheses:
-        parts["weather"] = WEIGHT_WEATHER
-
-    # --- штрафы ---
-    if cloud_fraction is not None and cloud_fraction >= HEAVY_CLOUD_FRACTION:
-        parts["clouds"] = PENALTY_CLOUDS
-        notes.append(f"оптический ряд в окне закрыт облаками на {cloud_fraction:.0%}")
-
-    # Штраф не за сам факт нескольких орбит: сравнения между орбитами нигде
-    # не делаются, ни в уровне, ни в разностях. Он за фрагментированную
-    # доказательную базу — когда окно на вид плотное, но пригодной к сравнению
-    # орбиты в нём одна съёмка, а остальное набрано пролётами, которые с ней
-    # не сопоставимы. Подтверждение по одной точке слабое, и это должно быть
-    # видно в оценке.
-    if parts.get("radar") and len(window) > 1:
-        orbit = _dominant_orbit(window)
-        aligned = sum(
-            1
-            for sample in window
-            if (sample.orbit_direction, sample.relative_orbit) == orbit
-        )
-        if aligned < 2:
-            parts["mixed_orbit"] = PENALTY_MIXED_ORBIT
-            notes.append(
-                "в окне события лишь одна съёмка пригодной к сравнению орбиты, "
-                "остальные принадлежат другим пролётам и с ней не сопоставимы"
-            )
-
-    score = max(0, min(100, sum(parts.values())))
-    return Corroboration(
-        score=score,
-        level=_level(score),
-        radar_verdict=radar_verdict,
-        parts=parts,
-        notes=notes,
-    )
-
-
-def _level(score: int) -> str:
-    for threshold, name in LEVEL_THRESHOLDS:
-        if score >= threshold:
-            return name
-    return "weak"
+    if _confirms(samples, window, events or [], start_date, end_date):
+        return RADAR_AGREES
+    return RADAR_SILENT
 
 
 def _window_samples(
@@ -459,13 +338,13 @@ def _window_samples(
     ]
 
 
-def _radar_confirmation(
+def _confirms(
     samples: list[RadarSample],
     window: list[RadarSample],
     events: list[RadarEvent],
     start_date: date,
     end_date: date,
-) -> str | None:
+) -> bool:
     """Подтверждает ли радар угнетение в окне события.
 
     Признаков два, и они отвечают на разные вопросы. Уровень относительно
@@ -475,9 +354,6 @@ def _radar_confirmation(
     всё равно резко просесть, и наоборот — держаться ниже нормы весь период
     без единого скачка.
     """
-    if not window:
-        return None
-
     margin = timedelta(days=CONFIRMATION_WINDOW_DAYS)
     inside = [
         event
@@ -487,11 +363,7 @@ def _radar_confirmation(
         and start_date - margin <= event.date <= end_date + margin
     ]
     if inside:
-        worst = min(inside, key=lambda event: event.magnitude_db)
-        return (
-            f"радар зафиксировал резкое снижение сигнала растительности "
-            f"{worst.date.isoformat()} ({worst.magnitude_db:+.1f} дБ)"
-        )
+        return True
 
     orbit = _dominant_orbit(window)
     history = [
@@ -523,24 +395,14 @@ def _radar_confirmation(
             is not None
         ]
         if zscores:
-            mean_z = float(np.mean(zscores))
-            if mean_z <= RADAR_CONFIRMATION_Z:
-                return (
-                    f"радарный сигнал растительности ниже обычного для этого поля "
-                    f"(z = {mean_z:.1f})"
-                )
-            return None
+            return float(np.mean(zscores)) <= RADAR_CONFIRMATION_Z
 
     # Запасной признак: истории на норму не хватило, смотрим на само падение —
     # снова внутри одной орбиты, разрыв между орбитами падением не является.
-    drops = [
-        sample
+    return any(
+        previous.vh_median_db - sample.vh_median_db >= SIGNIFICANT_CHANGE_DB
         for previous, sample in zip(aligned, aligned[1:], strict=False)
-        if previous.vh_median_db - sample.vh_median_db >= SIGNIFICANT_CHANGE_DB
-    ]
-    if drops:
-        return "радар показывает резкое снижение сигнала растительности внутри периода"
-    return None
+    )
 
 
 def _dominant_orbit(window: list[RadarSample]) -> tuple:

@@ -97,11 +97,9 @@ export interface Anomaly {
   max_zscore: number;
   mean_zscore: number | null;
   restored_fraction: number | null;
-  confidence: number | null;
-  /** Подтверждённость независимыми источниками, 0..100. Отвечает не на тот же
-   *  вопрос, что `confidence`: не «хватило ли данных посчитать событие»,
-   *  а «сошлись ли на нём радар, оптика и погода». */
-  corroboration: number | null;
+  /** Можно ли верить событию. Один сигнал вместо прежних трёх; основания
+   *  вердикта лежат в `factors.trust`. */
+  trust: "confirmed" | "unverified" | "disputed" | null;
   factors: Record<string, unknown> | null;
   explanation: string | null;
 }

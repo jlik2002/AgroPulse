@@ -31,6 +31,7 @@ from agropulse.analytics import anomalies as anomalies_module
 from agropulse.analytics import climatology as climatology_module
 from agropulse.analytics import radar as radar_module
 from agropulse.analytics import risk as risk_module
+from agropulse.analytics import trust as trust_module
 from agropulse.analytics.anomalies import AnomalyPeriod, SeriesSample
 from agropulse.analytics.climatology import Climatology, phase_of
 from agropulse.analytics.radar import RadarSample
@@ -103,6 +104,9 @@ class AnalysisContext:
     weather_by_date: dict[date, tuple[float | None, float | None]]
     valid_fractions: list[float]
     cloud_by_date: dict[date, float] = dataclass_field(default_factory=dict)
+    # Доля пригодных пикселей по датам съёмки. Нужна вердикту о доверии:
+    # снимок, наполовину закрытый облаком, свидетельство слабее целого.
+    coverage_by_date: dict[date, float] = dataclass_field(default_factory=dict)
     radar: list[RadarSample] = dataclass_field(default_factory=list)
 
     @property
@@ -352,6 +356,11 @@ class FieldPipeline:
                     for o in observations
                     if o.cloud_fraction is not None
                 },
+                coverage_by_date={
+                    o.date: o.valid_fraction
+                    for o in observations
+                    if o.valid_fraction is not None
+                },
                 radar=[_to_radar_sample(row) for row in radar_rows],
             )
 
@@ -437,17 +446,12 @@ class FieldPipeline:
         подтверждённость считается по одной оптике и погоде, и это честно
         отражается в её составе.
         """
-        if not context.radar:
-            for period in periods:
-                _apply_corroboration(period, context, in_period, samples=[], events=[])
-            return {}, []
-
-        derived = radar_module.derive(context.radar)
-        events = radar_module.detect_events(context.radar, derived)
+        derived = radar_module.derive(context.radar) if context.radar else {}
+        events = (
+            radar_module.detect_events(context.radar, derived) if context.radar else []
+        )
         for period in periods:
-            _apply_corroboration(
-                period, context, in_period, samples=context.radar, events=events
-            )
+            _apply_trust(period, context, in_period, events)
         return derived, events
 
     def _restore_gaps(
@@ -724,47 +728,60 @@ def _to_radar_sample(row) -> RadarSample:
     )
 
 
-def _apply_corroboration(
+def _apply_trust(
     period: AnomalyPeriod,
     context: AnalysisContext,
     in_period: list[SeriesSample],
-    samples: list[RadarSample],
     events: list[radar_module.RadarEvent],
 ) -> None:
-    """Дописать в аномалию оценку подтверждённости независимыми источниками.
+    """Вынести вердикт о доверии к событию и записать его основания.
 
-    Результат кладётся в `factors`, потому что оттуда он уезжает в API и отчёт
-    без отдельного преобразования, и дублируется отдельной колонкой — по ней
-    аномалии можно отбирать запросом, не разбирая JSON.
+    Считаются настоящие наблюдения в окне, а не точки суточной сетки.
+    Разница не тонкая: сетка заполнена восстановленными значениями, и вывод,
+    опирающийся на них, подтверждает сам себя. Прежний показатель ровно это
+    и делал, поэтому получался одинаковым у всех событий.
     """
-    clouds = [
-        value
-        for day, value in context.cloud_by_date.items()
-        if period.start_date <= day <= period.end_date
-    ]
-    observed_points = sum(
-        1
+    observed = [
+        sample
         for sample in in_period
         if period.start_date <= sample.date <= period.end_date
         and sample.value_type == ValueType.OBSERVED
-    )
+    ]
+    coverage_values = [
+        value
+        for sample in observed
+        if (value := context.coverage_by_date.get(sample.date)) is not None
+    ]
 
-    result = radar_module.corroborate(
+    radar_verdict = radar_module.verdict(
         start_date=period.start_date,
         end_date=period.end_date,
-        observed_points=observed_points,
-        restored_fraction=period.restored_fraction,
-        cloud_fraction=sum(clouds) / len(clouds) if clouds else None,
-        weather_hypotheses=period.factors.get("hypotheses") or [],
-        samples=samples,
+        samples=context.radar,
         events=events,
     )
 
-    period.factors["corroboration"] = result.score
-    period.factors["corroboration_level"] = result.level
-    period.factors["corroboration_radar"] = result.radar_verdict
-    period.factors["corroboration_parts"] = result.parts
-    period.factors["corroboration_notes"] = result.notes
+    result = trust_module.assess(
+        observations=len(observed),
+        coverage=(
+            sum(coverage_values) / len(coverage_values) if coverage_values else None
+        ),
+        radar=radar_verdict,
+        weather_explains=bool(period.factors.get("hypotheses")),
+        phase_mismatch=period.phase_mismatch,
+    )
+
+    period.trust = result.level
+    # Основания уезжают в API и отчёт как есть: вердикт без причин — это
+    # ещё один непонятный ярлык на экране, а не сигнал.
+    period.factors["trust"] = {
+        "level": result.level,
+        "optical": result.optical,
+        "radar": result.radar,
+        "observations": result.observations,
+        "weather_explains": result.weather_explains,
+        "phase_mismatch": result.phase_mismatch,
+        "reasons": result.reasons,
+    }
 
 
 def _radar_rows(field_id: uuid.UUID, items: list) -> list[dict]:
@@ -871,8 +888,7 @@ def _to_anomaly(field_id: uuid.UUID, period: AnomalyPeriod) -> Anomaly:
         max_zscore=period.max_zscore,
         mean_zscore=period.mean_zscore,
         restored_fraction=period.restored_fraction,
-        confidence=period.confidence,
-        corroboration=period.factors.get("corroboration"),
+        trust=period.trust,
         factors=period.factors,
     )
 

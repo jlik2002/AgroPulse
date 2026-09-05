@@ -126,169 +126,73 @@ def test_small_fluctuation_is_not_an_event() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Подтверждённость
+# Вердикт радара
 # ---------------------------------------------------------------------------
 
 
-def _corroborate(**overrides):
-    defaults = dict(
-        start_date=date(2026, 7, 1),
-        end_date=date(2026, 7, 20),
-        observed_points=4,
-        restored_fraction=0.1,
-        cloud_fraction=0.1,
-        weather_hypotheses=["водный стресс"],
-        samples=[],
-        events=[],
-    )
-    return radar_module.corroborate(**{**defaults, **overrides})
-
-
-def test_radar_confirmation_raises_corroboration() -> None:
-    """Совпадение аномалии в двух независимых источниках — главный признак
-    того, что событие настоящее."""
-    without_radar = _corroborate()
-
-    # Ряд с резким падением сигнала внутри окна события.
-    samples = [
-        RadarSample(
-            date=date(2026, 7, 4),
-            orbit_direction="descending",
-            relative_orbit=43,
-            vh_median_db=-15.0,
-        ),
-        RadarSample(
-            date=date(2026, 7, 16),
-            orbit_direction="descending",
-            relative_orbit=43,
-            vh_median_db=-19.0,
-        ),
-    ]
-    with_radar = _corroborate(samples=samples)
-
-    assert with_radar.score > without_radar.score
-    assert with_radar.parts["radar"] == radar_module.WEIGHT_RADAR
-    assert with_radar.level == "high"
-
-
-def test_radar_event_inside_the_window_confirms_the_anomaly() -> None:
-    """Уровень сигнала может остаться в норме, а структура — резко просесть
-    именно в дни события. Это тоже подтверждение, и его нельзя терять."""
-    drop = radar_module.RadarEvent(
-        date=date(2026, 7, 9),
-        kind="vegetation_drop",
-        magnitude_db=-4.2,
-        score=0.9,
-        title="Резкое снижение радарного сигнала растительности",
-        confirmed=True,
-    )
-    # Ряд ровный: по уровню относительно нормы подтверждения не будет.
-    flat = [
-        RadarSample(date=date(2026, 7, 2) + timedelta(days=index * 12),
-                    orbit_direction="descending", relative_orbit=43, vh_median_db=-18.0)
-        for index in range(2)
-    ]
-
-    result = _corroborate(samples=flat, events=[drop])
-
-    assert result.parts["radar"] == radar_module.WEIGHT_RADAR
-    assert any("резкое снижение" in note for note in result.notes)
-
-
-def test_unconfirmed_radar_event_does_not_corroborate() -> None:
-    """Скачок, удержание которого проверить нечем, подтверждением не является."""
-    unconfirmed = radar_module.RadarEvent(
-        date=date(2026, 7, 9),
-        kind="vegetation_drop",
-        magnitude_db=-4.2,
-        score=0.9,
-        title="Резкое снижение радарного сигнала растительности",
-        confirmed=False,
-    )
-    flat = [
-        RadarSample(date=date(2026, 7, 2) + timedelta(days=index * 12),
-                    orbit_direction="descending", relative_orbit=43, vh_median_db=-18.0)
-        for index in range(2)
-    ]
-
-    assert "radar" not in _corroborate(samples=flat, events=[unconfirmed]).parts
-
-
-def test_mostly_restored_period_gets_less_optical_weight() -> None:
-    """Событие, собранное в основном из восстановленных точек, измерено
-    слабее: модель дорисовала то, чего спутник не видел."""
-    measured = _corroborate(restored_fraction=0.1)
-    imputed = _corroborate(restored_fraction=0.8)
-
-    assert imputed.parts["optical"] < measured.parts["optical"]
-    assert any("восстановлены моделью" in note for note in imputed.notes)
-
-
-def test_heavy_clouds_lower_corroboration() -> None:
-    """Оптический ряд под сплошными облаками — слабое основание для вывода."""
-    clear = _corroborate(cloud_fraction=0.1)
-    cloudy = _corroborate(cloud_fraction=0.9)
-
-    assert cloudy.score < clear.score
-    assert cloudy.parts["clouds"] == radar_module.PENALTY_CLOUDS
-
-
-def test_fragmented_orbits_lower_corroboration() -> None:
-    """Окно может выглядеть плотным, а пригодной к сравнению орбиты в нём —
-    одна съёмка: остальное набрано пролётами, с ней не сопоставимыми.
-    Подтверждение по одной точке слабее, и это должно быть видно в оценке."""
-    same_orbit = [
-        RadarSample(date=date(2026, 7, 4), orbit_direction="descending",
-                    relative_orbit=43, vh_median_db=-15.0),
-        RadarSample(date=date(2026, 7, 16), orbit_direction="descending",
-                    relative_orbit=43, vh_median_db=-19.0),
-    ]
-    mixed = [
-        same_orbit[0],
-        RadarSample(date=date(2026, 7, 16), orbit_direction="ascending",
-                    relative_orbit=116, vh_median_db=-19.0),
-    ]
-
-    assert _corroborate(samples=mixed).score < _corroborate(samples=same_orbit).score
-
-
 def test_radar_verdict_separates_silence_from_absence() -> None:
-    """Низкий балл получается по двум разным причинам, и путать их нельзя.
+    """Низкий уровень доверия получается по двум разным причинам, и путать
+    их нельзя.
 
-    «Снимки в окне есть, изменений не видно» — повод усомниться в событии.
-    «Снимков в окне нет» — повод усомниться только в своей осведомлённости,
-    и понижать приоритет поля из-за этого нельзя: подтверждённость проседает
-    от облачности, то есть тогда, когда смотреть надо больше, а не меньше.
+    «Снимки в окне есть, изменений не видно» — свидетельство против события.
+    «Снимков нет» — не свидетельство вообще: радарного покрытия не хватает
+    независимо от того, что происходило на поле.
     """
+    window = dict(start_date=date(2026, 7, 1), end_date=date(2026, 7, 20), events=[])
+
     silent = [
         RadarSample(date=date(2026, 7, 4), orbit_direction="descending",
                     relative_orbit=43, vh_median_db=-18.0),
         RadarSample(date=date(2026, 7, 16), orbit_direction="descending",
                     relative_orbit=43, vh_median_db=-18.1),
     ]
-    # Снимки есть, изменений нет.
-    assert _corroborate(samples=silent).radar_verdict == radar_module.RADAR_SILENT
-    # Снимков в окне нет вовсе.
-    assert _corroborate(samples=[]).radar_verdict == radar_module.RADAR_NO_DATA
-    # Радар подтверждает.
+    assert radar_module.verdict(samples=silent, **window) == radar_module.RADAR_SILENT
+
+    assert radar_module.verdict(samples=[], **window) == radar_module.RADAR_NO_DATA
+
     dropping = [
         silent[0],
         RadarSample(date=date(2026, 7, 16), orbit_direction="descending",
                     relative_orbit=43, vh_median_db=-22.0),
     ]
-    assert _corroborate(samples=dropping).radar_verdict == radar_module.RADAR_AGREES
+    assert radar_module.verdict(samples=dropping, **window) == radar_module.RADAR_AGREES
 
 
-def test_score_never_leaves_its_range() -> None:
-    """Оценка остаётся в 0..100 при любом наборе штрафов."""
-    worst = _corroborate(
-        observed_points=0,
-        restored_fraction=1.0,
-        cloud_fraction=1.0,
-        weather_hypotheses=[],
+def test_radar_event_inside_the_window_is_confirmation() -> None:
+    """Уровень сигнала может остаться в норме, а структура — резко просесть
+    именно в дни события. Это тоже подтверждение, и терять его нельзя."""
+    flat = [
+        RadarSample(date=date(2026, 7, 2) + timedelta(days=index * 12),
+                    orbit_direction="descending", relative_orbit=43, vh_median_db=-18.0)
+        for index in range(2)
+    ]
+    drop = radar_module.RadarEvent(
+        date=date(2026, 7, 9), kind="vegetation_drop", magnitude_db=-4.2, score=0.9,
+        title="Резкое снижение радарного сигнала растительности", confirmed=True,
     )
-    assert 0 <= worst.score <= 100
-    assert worst.level == "weak"
+
+    assert radar_module.verdict(
+        start_date=date(2026, 7, 1), end_date=date(2026, 7, 20),
+        samples=flat, events=[drop],
+    ) == radar_module.RADAR_AGREES
+
+
+def test_unconfirmed_radar_event_is_not_confirmation() -> None:
+    """Скачок, удержание которого проверить нечем, подтверждением не является."""
+    flat = [
+        RadarSample(date=date(2026, 7, 2) + timedelta(days=index * 12),
+                    orbit_direction="descending", relative_orbit=43, vh_median_db=-18.0)
+        for index in range(2)
+    ]
+    unconfirmed = radar_module.RadarEvent(
+        date=date(2026, 7, 9), kind="vegetation_drop", magnitude_db=-4.2, score=0.9,
+        title="Резкое снижение радарного сигнала растительности", confirmed=False,
+    )
+
+    assert radar_module.verdict(
+        start_date=date(2026, 7, 1), end_date=date(2026, 7, 20),
+        samples=flat, events=[unconfirmed],
+    ) == radar_module.RADAR_SILENT
 
 
 # ---------------------------------------------------------------------------

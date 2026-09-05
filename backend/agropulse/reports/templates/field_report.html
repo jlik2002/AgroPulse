@@ -141,17 +141,11 @@
       <tr><td>Максимальное отклонение от нормы</td><td class="num">{{ anomaly.max_zscore }}</td></tr>
       <tr><td>Уровень</td><td>{{ anomaly.severity_level }}</td></tr>
       <tr><td>Доля восстановленных значений</td><td class="num">{{ anomaly.restored_fraction }}</td></tr>
-      <tr><td>Уверенность в событии</td><td class="num">{{ anomaly.confidence }}</td></tr>
-      {% if anomaly.corroboration is not none %}
-      <tr>
-        <td>Подтверждённость независимыми источниками</td>
-        <td class="num">{{ anomaly.corroboration }} из 100 — {{ anomaly.corroboration_title }}</td>
-      </tr>
-      {% endif %}
+      <tr><td>Можно ли верить событию</td><td>{{ anomaly.trust_title }}</td></tr>
     </table>
-    {% if anomaly.corroboration_notes %}
-      <p><strong>Что учтено в оценке подтверждённости:</strong></p>
-      <ul>{% for note in anomaly.corroboration_notes %}<li>{{ note }}</li>{% endfor %}</ul>
+    {% if anomaly.trust_reasons %}
+      <p><strong>На чём основан вердикт:</strong></p>
+      <ul>{% for reason in anomaly.trust_reasons %}<li>{{ reason }}</li>{% endfor %}</ul>
     {% endif %}
     {% if anomaly.phase_mismatch %}
       <div class="note warning">

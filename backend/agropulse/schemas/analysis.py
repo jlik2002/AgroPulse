@@ -22,11 +22,10 @@ class AnomalyRead(BaseModel):
     mean_zscore: float | None
     # Доля восстановленных точек внутри периода: чем выше, тем осторожнее вывод.
     restored_fraction: float | None
-    confidence: float | None
-    # Подтверждённость независимыми источниками, 0..100. Отвечает на другой
-    # вопрос, нежели `confidence`: не «хватило ли данных посчитать», а
-    # «сошлись ли на событии радар, оптика и погода».
-    corroboration: int | None
+    # Можно ли верить событию: confirmed | unverified | disputed.
+    # Основания вердикта лежат в `factors["trust"]`: без них это ещё один
+    # непонятный ярлык, а не сигнал.
+    trust: str | None
     # Совпавшие факторы и гипотезы о причинах. Это версии, а не диагноз.
     factors: dict | None
     explanation: str | None

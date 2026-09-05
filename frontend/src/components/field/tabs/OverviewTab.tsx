@@ -19,7 +19,7 @@ import { Card, CardHeader } from "@/components/ui/Card";
 import { Chip } from "@/components/ui/Chip";
 import { Segmented } from "@/components/ui/Segmented";
 import { cn } from "@/lib/cn";
-import { corroborationOf } from "@/lib/corroboration";
+import { trustOf } from "@/lib/trust";
 import {
   daysWord,
   formatDateRangeShort,
@@ -59,10 +59,11 @@ export function OverviewTab({ analysis, projectId, onOpenTab }: OverviewTabProps
     : null;
   const quality = dataQualityTitle(meanValid);
   const qualityGood = (meanValid ?? 0) >= 0.8;
-  // Качество данных относится к периоду целиком, подтверждённость — к самому
-  // событию. Когда событие есть, вопрос «можно ли ему верить» важнее, и он
-  // выносится в отдельный разбор ниже.
-  const trust = corroborationOf(worst);
+  // Качество данных относится к периоду целиком, вердикт — к самому событию.
+  // Когда событие есть, вопрос «можно ли ему верить» важнее, и «Качество
+  // анализа» в шапке уступает ему место: два показателя об одном и том же
+  // рядом друг с другом складывались в шум, а не в картину.
+  const trust = trustOf(worst);
 
   return (
     <div className="space-y-4">
@@ -139,14 +140,27 @@ export function OverviewTab({ analysis, projectId, onOpenTab }: OverviewTabProps
         </div>
 
         <div className="ml-auto flex shrink-0 items-center gap-5">
-          <span className="flex items-center gap-2 text-[14px] text-ink-soft">
-            {qualityGood ? (
-              <CircleCheck size={18} className="text-ok" />
-            ) : (
-              <CircleAlert size={18} className="text-warn" />
-            )}
-            Качество анализа: {quality}
-          </span>
+          {trust ? (
+            <span className="flex items-center gap-2 text-[14px] text-ink-soft">
+              {trust.tone === "good" ? (
+                <CircleCheck size={18} className="text-ok" />
+              ) : trust.tone === "warn" ? (
+                <TriangleAlert size={18} className="text-warn" />
+              ) : (
+                <CircleAlert size={18} className="text-ink-muted" />
+              )}
+              {trust.title}
+            </span>
+          ) : (
+            <span className="flex items-center gap-2 text-[14px] text-ink-soft">
+              {qualityGood ? (
+                <CircleCheck size={18} className="text-ok" />
+              ) : (
+                <CircleAlert size={18} className="text-warn" />
+              )}
+              Качество анализа: {quality}
+            </span>
+          )}
           <Button onClick={() => setChecklist(true)}>Что проверить при выезде</Button>
         </div>
       </div>

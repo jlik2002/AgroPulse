@@ -9,6 +9,14 @@
 
 Пороги z-score взяты из постановки задачи: от -1 до -2 — угнетение биомассы,
 ниже -2 — критическая аномалия.
+
+Модуль отвечает только на вопрос «есть ли устойчивое отклонение». Вопрос
+«можно ли этому верить» решается отдельно, в `analytics/trust.py`, по
+свидетельствам из независимых источников. Раньше он решался здесь же
+числом `confidence`, и число это складывалось из длительности, числа точек
+суточной сетки (то есть снова длительности) и доли восстановленных значений,
+которая у любого события равна примерно 0,8 по построению. Мера, не зависящая
+ни от чего, кроме длительности, называлась уверенностью — этого больше нет.
 """
 
 from __future__ import annotations
@@ -68,7 +76,10 @@ class AnomalyPeriod:
     mean_zscore: float
     points: int
     restored_fraction: float
-    confidence: float
+    # Вердикт о доверии. Выносится не здесь: этот модуль отвечает только за то,
+    # есть ли отклонение, а можно ли ему верить — вопрос независимых источников
+    # и решается в `analytics/trust.py`.
+    trust: str | None = None
     # Признак того, что сезон в целом не совпал по фазе с историей поля.
     phase_mismatch: bool = False
     factors: dict = dataclass_field(default_factory=dict)
@@ -113,9 +124,10 @@ def detect(
                 period.phase_mismatch = True
                 # factors уезжает в API как есть, поэтому признак кладём и туда.
                 period.factors["phase_mismatch"] = True
-                # Уверенность режем вдвое и добавляем гипотезу: вывод остаётся
-                # виден пользователю, но подан как сомнительный.
-                period.confidence = round(period.confidence * 0.5, 3)
+                # Прежде здесь вдвое резалась уверенность — число падало,
+                # а причина оставалась невидимой. Теперь признак уходит
+                # в вердикт о доверии (`analytics/trust.py`), где он назван
+                # словами и виден пользователю.
                 period.factors.setdefault("hypotheses", []).insert(
                     0,
                     "динамика поля не совпадает с его историей: вероятна смена культуры "
@@ -164,22 +176,8 @@ def _build_period(group: list[tuple[SeriesSample, float]]) -> AnomalyPeriod | No
         mean_zscore=round(sum(zs) / len(zs), 4),
         points=len(group),
         restored_fraction=round(restored_fraction, 3),
-        confidence=_confidence(len(group), restored_fraction, duration),
         factors=_factors(samples),
     )
-
-
-def _confidence(points: int, restored_fraction: float, duration: int) -> float:
-    """Уверенность в событии.
-
-    Растёт с числом подтверждающих точек и длительностью, падает с долей
-    восстановленных значений: вывод, опирающийся на интерполяцию, слабее вывода
-    по фактическим наблюдениям.
-    """
-    from_points = min(points / 5.0, 1.0)
-    from_duration = min(duration / 20.0, 1.0)
-    penalty = 1.0 - 0.5 * restored_fraction
-    return round(max(0.05, (0.5 * from_points + 0.5 * from_duration) * penalty), 3)
 
 
 def _factors(samples: list[SeriesSample]) -> dict:

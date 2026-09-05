@@ -279,8 +279,21 @@ def analyzed_field(client, created_field, db_session) -> dict:
             max_zscore=-2.4,
             mean_zscore=-1.8,
             restored_fraction=0.2,
-            confidence=0.7,
-            factors={"hypotheses": ["сухо и жарко"], "ndmi_trend": -0.06},
+            trust="confirmed",
+            factors={
+                "hypotheses": ["сухо и жарко"],
+                "ndmi_trend": -0.06,
+                "trust": {
+                    "level": "confirmed",
+                    "optical": "strong",
+                    "radar": "agrees",
+                    "observations": 4,
+                    "reasons": [
+                        "событие измерено: пригодных снимка в окне 4",
+                        "радар независимо показывает то же самое",
+                    ],
+                },
+            },
         )
     )
     db_session.add(

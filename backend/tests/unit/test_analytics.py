@@ -199,8 +199,17 @@ def test_deep_deviation_is_marked_critical(healthy_climatology) -> None:
     assert periods[0].severity == AnomalySeverity.CRITICAL
 
 
-def test_restored_points_lower_confidence(healthy_climatology) -> None:
-    """Вывод по интерполяции слабее вывода по фактическим снимкам."""
+def test_event_reports_how_much_of_it_was_interpolated(healthy_climatology) -> None:
+    """Состав события сообщается честно: сколько в нём измеренного,
+    сколько дорисованного.
+
+    Сам вывод о доверии здесь не делается — этим занимается
+    `analytics/trust.py` по независимым источникам. Раньше он делался прямо
+    тут, числом `confidence`, и опирался на долю восстановленных значений.
+    Доля эта равна примерно 0,8 у любого события по построению: восстановление
+    заполняет каждый день периода, а Sentinel-2 летает раз в пять суток.
+    Показатель получался одинаковым у всех событий и уверенности не измерял.
+    """
     curve = [
         (day, value - 0.25 if 17 <= index <= 24 else value)
         for index, (day, value) in enumerate(season_curve(2024))
@@ -215,7 +224,8 @@ def test_restored_points_lower_confidence(healthy_climatology) -> None:
     by_observation, _ = anomalies_module.detect(observed, healthy_climatology, None)
     by_restoration, _ = anomalies_module.detect(restored, healthy_climatology, None)
 
-    assert by_restoration[0].confidence < by_observation[0].confidence
+    assert by_observation[0].restored_fraction == 0.0
+    assert by_restoration[0].restored_fraction == 1.0
 
 
 def test_crop_rotation_is_recognised_by_curve_shape(healthy_climatology) -> None:
@@ -308,7 +318,6 @@ def test_risk_breakdown_sums_to_score() -> None:
         mean_zscore=-2.0,
         points=6,
         restored_fraction=0.1,
-        confidence=0.8,
         factors={"ndmi_trend": -0.08, "precipitation_sum": 4.0, "temperature_max": 35.0},
     )
 
@@ -337,7 +346,6 @@ def test_phase_mismatch_halves_the_score_and_says_why() -> None:
         "mean_zscore": -2.0,
         "points": 6,
         "restored_fraction": 0.0,
-        "confidence": 0.8,
         "factors": {},
     }
     straight = anomalies_module.AnomalyPeriod(**common)

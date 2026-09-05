@@ -49,19 +49,20 @@ SEVERITY_TITLES = {
     "critical": "Критическая аномалия",
 }
 
+ORBIT_TITLES = {"ascending": "восходящая", "descending": "нисходящая"}
+
+# Вердикт о доверии словами. Числа здесь нет и не было бы толку: веса прежней
+# суммы назначались, а не измерялись, и «35 из 100» в документе выглядело бы
+# точностью, которой нет.
+TRUST_TITLES = {
+    "confirmed": "подтверждено независимым источником",
+    "unverified": "проверить вторым источником не удалось",
+    "disputed": "независимый источник не подтверждает",
+}
+
 # Тяжесть события как ступень шкалы. Отдельно от названия: в строке таблицы
 # «Уровень» значение обязано быть уровнем, а «Угнетение биомассы» — это то,
 # что произошло, а не насколько сильно.
-# Словесная передача подтверждённости: число 0..100 само по себе читателю
-# отчёта ничего не говорит, а решение принимается по уровню.
-ORBIT_TITLES = {"ascending": "восходящая", "descending": "нисходящая"}
-
-CORROBORATION_LEVELS = {
-    "high": "высокая",
-    "possible": "средняя",
-    "weak": "низкая",
-}
-
 SEVERITY_LEVELS = {
     "moderate": "Умеренный",
     "critical": "Критический",
@@ -276,12 +277,8 @@ def build_field_report(
                     anomaly.severity.value, anomaly.severity.value
                 ),
                 "restored_fraction": _round(anomaly.restored_fraction),
-                "confidence": _round(anomaly.confidence),
-                "corroboration": anomaly.corroboration,
-                "corroboration_title": CORROBORATION_LEVELS.get(
-                    factors.get("corroboration_level") or ""
-                ),
-                "corroboration_notes": factors.get("corroboration_notes") or [],
+                "trust_title": TRUST_TITLES.get(anomaly.trust or "", "не проверялось"),
+                "trust_reasons": (factors.get("trust") or {}).get("reasons") or [],
                 "phase_mismatch": bool(factors.get("phase_mismatch")),
                 "hypotheses": factors.get("hypotheses") or [],
                 "explanation": explanation.text,
@@ -479,7 +476,7 @@ def _field_payload(
                 "duration_days": a.duration_days,
                 "max_zscore": _round(a.max_zscore),
                 "severity": SEVERITY_TITLES.get(a.severity.value),
-                "confidence": _round(a.confidence),
+                "trust": TRUST_TITLES.get(a.trust or "", "не проверялось"),
                 "factors": a.factors,
             }
             for a in anomalies
@@ -500,7 +497,7 @@ def _anomaly_payload(field: Field, anomaly: Anomaly) -> dict:
         "mean_zscore": _round(anomaly.mean_zscore),
         "severity": SEVERITY_TITLES.get(anomaly.severity.value),
         "restored_fraction": _round(anomaly.restored_fraction),
-        "confidence": _round(anomaly.confidence),
+        "trust": anomaly.trust,
         "phase_mismatch": bool(factors.get("phase_mismatch")),
         "factors": factors,
     }
