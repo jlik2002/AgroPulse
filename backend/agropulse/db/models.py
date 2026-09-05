@@ -18,6 +18,7 @@ from datetime import date, datetime
 
 from geoalchemy2 import Geometry
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -393,8 +394,25 @@ class Anomaly(Base):
     duration_days: Mapped[int] = mapped_column(Integer, nullable=False)
 
     severity: Mapped[AnomalySeverity] = mapped_column(_enum(AnomalySeverity, "anomaly_severity"))
+    # Основная глубина отклонения. На полях с историей это z-score относительно
+    # собственной нормы; без истории — робастное отклонение от плавной динамики
+    # текущего сезона (level_z).
     max_zscore: Mapped[float] = mapped_column(Float, nullable=False)
     mean_zscore: Mapped[float | None] = mapped_column(Float)
+
+    # Единый балл движка 0..100: глубина и устойчивость отклонения. Это не мера
+    # доверия — надёжность вывода живёт отдельно, в поле `trust`. По построению
+    # балл работает и без истории поля, поэтому это опора карточки события.
+    anomaly_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    # Сигналы движка в пиковой точке события. Хранятся вместе с итогом, чтобы
+    # интерфейс мог объяснить, из чего сложился балл.
+    # level_z — отклонение от плавной кривой сезона; slope_z — аномальность
+    # наклона; historical_z — отклонение от собственной нормы (только при
+    # наличии истории). change_point_nearby — рядом структурный перелом ряда.
+    level_z: Mapped[float | None] = mapped_column(Float)
+    slope_z: Mapped[float | None] = mapped_column(Float)
+    historical_z: Mapped[float | None] = mapped_column(Float)
+    change_point_nearby: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # Доля восстановленных точек внутри периода: чем она выше, тем осторожнее вывод.
     restored_fraction: Mapped[float | None] = mapped_column(Float)

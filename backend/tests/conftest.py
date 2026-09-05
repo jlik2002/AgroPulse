@@ -278,6 +278,11 @@ def analyzed_field(client, created_field, db_session) -> dict:
             severity=AnomalySeverity.CRITICAL,
             max_zscore=-2.4,
             mean_zscore=-1.8,
+            anomaly_score=78.0,
+            level_z=-2.9,
+            slope_z=-1.7,
+            historical_z=-2.4,
+            change_point_nearby=True,
             restored_fraction=0.2,
             trust="confirmed",
             factors={

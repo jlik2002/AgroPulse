@@ -28,6 +28,8 @@ dependencies = [
     "numpy~=2.1.0",
     "pandas~=2.2.3",
     "scipy~=1.14.1",
+    "statsmodels~=0.14.4",           # LOWESS-базлайн ожидаемой кривой сезона
+    "ruptures~=1.1.9",               # PELT — поиск структурных переломов ряда NDVI
 
     # --- внешние источники ---
     "earthengine-api~=1.1.2",        # основной источник Sentinel-2

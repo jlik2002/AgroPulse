@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+import numpy as np
 import pytest
 from agropulse.analytics import anomalies as anomalies_module
 from agropulse.analytics import climatology as climatology_module
@@ -280,6 +281,166 @@ def test_matching_season_is_not_a_rotation(healthy_climatology) -> None:
 
 
 # ----------------------------------------------------------------------
+# Детекция без истории поля
+# ----------------------------------------------------------------------
+
+
+@pytest.fixture
+def no_climatology() -> climatology_module.Climatology:
+    """Поле, у которого прошлых сезонов нет вовсе."""
+    return climatology_module.build(
+        history=[], target_dates=[day for day, _ in season_curve(2024)], sowing_date=None
+    )
+
+
+def collapsed_season() -> list[tuple[date, float]]:
+    """Сезон, в середине которого поле потеряло вегетацию и не восстановилось."""
+    return [
+        (day, 0.05 if 17 <= index <= 24 else value)
+        for index, (day, value) in enumerate(season_curve(2024))
+    ]
+
+
+def test_anomaly_is_found_without_any_history(no_climatology) -> None:
+    """Главное свойство нового движка: норма не обязательна.
+
+    Прежний детектор при отсутствии климатологии возвращал пустой результат,
+    то есть поле без прошлых сезонов молча считалось благополучным. Обвал
+    вегетации обязан находиться и по одному текущему ряду.
+    """
+    assert no_climatology.available is False
+
+    periods, zscores = anomalies_module.detect(
+        samples_from(collapsed_season()), no_climatology, None
+    )
+
+    assert periods, "обвал вегетации обязан быть найден и без истории поля"
+    assert zscores, "отклонение от собственной динамики считается и без нормы"
+
+
+def test_event_without_history_covers_the_whole_depression(no_climatology) -> None:
+    """Событие — это весь период угнетения, а не день перелома.
+
+    Внутри длительной просадки остаток от плавной кривой обнуляется: кривая
+    уходит за просадкой следом. Если опираться только на него, событием
+    окажутся два отдельных дня на краях провала.
+    """
+    periods, _ = anomalies_module.detect(
+        samples_from(collapsed_season()), no_climatology, None
+    )
+
+    worst = periods[0]
+    assert worst.duration_days >= 30
+    assert worst.severity == AnomalySeverity.CRITICAL
+    assert worst.anomaly_score >= 80
+
+
+def test_healthy_season_without_history_creates_no_events(no_climatology) -> None:
+    """Созревание — не аномалия.
+
+    Осенью NDVI падает у любого здорового поля. Сравнение «стало ниже, чем
+    было» без поправки на уже идущее снижение объявило бы аномалией каждый
+    сезон, проанализированный после уборки.
+    """
+    periods, _ = anomalies_module.detect(
+        samples_from(season_curve(2024)), no_climatology, None
+    )
+
+    assert periods == []
+
+
+def test_single_outlier_without_history_is_not_an_event(no_climatology) -> None:
+    """Одиночный провал — это облако, а не потеря вегетации.
+
+    Отличие настоящей потери от недомаскированного облака в том, что после
+    облака следующий снимок возвращается на прежний уровень.
+    """
+    curve = season_curve(2024)
+    with_outlier = [(day, 0.05 if day == curve[20][0] else value) for day, value in curve]
+
+    periods, _ = anomalies_module.detect(
+        samples_from(with_outlier), no_climatology, None
+    )
+
+    assert periods == []
+
+
+def test_positive_deviation_without_history_creates_no_event(no_climatology) -> None:
+    """Поле лучше обычного — не повод отправлять агронома."""
+    curve = [(day, min(value + 0.2, 1.0)) for day, value in season_curve(2024)]
+
+    periods, _ = anomalies_module.detect(samples_from(curve), no_climatology, None)
+
+    assert periods == []
+
+
+def test_noise_alone_does_not_create_events(no_climatology) -> None:
+    """Шум измерения не должен порождать события.
+
+    Реальный ряд NDVI после маскирования облаков шумит на 0.02-0.04. Событие,
+    открытое по мгновенному отклонению, при таком шуме возникает в трети
+    здоровых сезонов — поэтому событие открывает только устойчивая просадка,
+    считаемая по медианам двухнедельных окон.
+    """
+    healthy = season_curve(2024)
+
+    for seed in range(10):
+        generator = np.random.default_rng(seed)
+        noisy = [
+            (day, float(np.clip(value + generator.normal(0, 0.02), 0.0, 1.0)))
+            for day, value in healthy
+        ]
+        periods, _ = anomalies_module.detect(
+            samples_from(noisy), no_climatology, None
+        )
+        assert periods == [], f"шум создал событие на здоровом сезоне, seed={seed}"
+
+
+def test_collapse_is_found_under_noise(no_climatology) -> None:
+    """Устойчивость к шуму не должна оборачиваться слепотой."""
+    for seed in range(10):
+        generator = np.random.default_rng(seed)
+        noisy = [
+            (day, float(np.clip(value + generator.normal(0, 0.04), 0.0, 1.0)))
+            for day, value in collapsed_season()
+        ]
+        periods, _ = anomalies_module.detect(
+            samples_from(noisy), no_climatology, None
+        )
+        assert periods, f"обвал не найден при шуме, seed={seed}"
+
+
+def test_event_carries_engine_signals(healthy_climatology) -> None:
+    """Карточка события несёт разложение сигналов, а не только итог.
+
+    Балл без оснований — ещё один непонятный ярлык на экране: пользователь
+    должен видеть, из чего он сложился.
+    """
+    curve = [
+        (day, value - 0.25 if 17 <= index <= 24 else value)
+        for index, (day, value) in enumerate(season_curve(2024))
+    ]
+
+    periods, _ = anomalies_module.detect(samples_from(curve), healthy_climatology, None)
+
+    worst = periods[0]
+    assert 0.0 <= worst.anomaly_score <= 100.0
+    assert worst.level_z is not None
+    # При наличии истории отклонение от собственной нормы попадает в событие.
+    assert worst.historical_z == worst.max_zscore
+    assert isinstance(worst.change_point_nearby, bool)
+
+
+def test_history_free_event_has_no_historical_signal(no_climatology) -> None:
+    """Без истории historical_z не выдумывается: сравнивать было не с чем."""
+    periods, _ = anomalies_module.detect(
+        samples_from(collapsed_season()), no_climatology, None
+    )
+
+    assert periods[0].historical_z is None
+
+
+# ----------------------------------------------------------------------
 # Риск
 # ----------------------------------------------------------------------
 
@@ -300,11 +461,40 @@ def test_no_risk_score_without_enough_observations() -> None:
     assert assessment.insufficient_reason
 
 
-def test_no_risk_score_without_climatology() -> None:
+def test_risk_is_scored_without_history_but_trusted_less() -> None:
+    """Отсутствие истории — не отсутствие данных.
+
+    Прежде поле без прошлых сезонов получало «данных не хватает»: старый
+    детектор без нормы не умел находить события вовсе. Движок по текущему ряду
+    умеет, поэтому оценка выставляется — но опирается на один сезон, и это
+    снижает уверенность и проговаривается пользователю.
+    """
+    arguments = {
+        "anomalies": [],
+        "recent_zscores": [(date(2024, 6, 1), -0.4)],
+        "observed_count": 20,
+        "mean_valid_fraction": 0.9,
+        "restored_fraction": 0.0,
+    }
+    with_history = risk_module.assess(climatology_available=True, **arguments)
+    without_history = risk_module.assess(climatology_available=False, **arguments)
+
+    assert without_history.score is not None
+    assert without_history.status != FieldStatus.INSUFFICIENT_DATA
+    assert without_history.insufficient_reason is None
+    # Риск тот же, доверие ниже: история влияет на надёжность вывода, а не на
+    # само состояние поля.
+    assert without_history.score == with_history.score
+    assert without_history.confidence < with_history.confidence
+    assert any("истории" in line for line in without_history.explanation)
+
+
+def test_no_risk_score_without_enough_observations_even_with_history() -> None:
+    """Недостаток данных — это отсутствие наблюдений, а не отсутствие нормы."""
     assessment = risk_module.assess(
         anomalies=[],
         recent_zscores=[],
-        observed_count=20,
+        observed_count=2,
         mean_valid_fraction=0.9,
         restored_fraction=0.0,
         climatology_available=False,
