@@ -11,9 +11,10 @@
 
 Ручная загрузка заранее подготовленного датасета в основном сценарии не требуется.
 
-> **Статус разработки.** Готовы этапы E0–E4: инфраструктура, управление полями,
+> **Статус разработки.** Готовы этапы E0–E6: инфраструктура, управление полями,
 > автоматический сбор спутниковых и погодных данных, поиск региона и готовых
-> контуров, восстановление пропусков, детекция аномалий и составной риск.
+> контуров, восстановление пропусков, детекция аномалий, составной риск,
+> прогноз на 14 суток, batch-инференс, выгрузка CSV и PDF-отчёты.
 > План работ и границы этапов: [`docs/PLAN.md`](docs/PLAN.md).
 
 ## Стек
@@ -26,7 +27,8 @@
 | Спутниковые данные | Google Earth Engine (Sentinel-2), STAC как резервный источник |
 | Погода | Open-Meteo (архив ERA5 и прогноз на 14 дней) |
 | Контуры полей | OpenStreetMap / Overpass API, ESA WorldCereal |
-| LLM | OpenRouter — только пересказ проверенных расчётов |
+| LLM | OpenRouter — только пересказ проверенных расчётов, со сверкой чисел |
+| Отчёты | WeasyPrint и Jinja2 для PDF, matplotlib для графиков |
 | Окружение | Docker Compose; Helm-чарт для Kubernetes |
 
 ## Быстрый старт
@@ -109,6 +111,29 @@ curl -s $API/fields/$FID/timeseries   # ряд со сводкой качест�
 curl -s $API/fields/$FID/anomalies    # аномальные периоды и гипотезы о причинах
 curl -s $API/fields/$FID/risk         # составной риск с вкладом факторов
 curl -s $API/projects/$PID/summary    # сводка и очередь на осмотр
+
+# 6. Выгрузка
+curl -s $API/fields/$FID/export.csv   -o field.csv
+curl -s $API/fields/$FID/report.pdf   -o field.pdf     # отчёт по полю
+curl -s $API/projects/$PID/report.pdf -o summary.pdf   # сводный отчёт
+```
+
+### Batch-инференс
+
+Вторая точка запуска: восстановление скрытых значений по готовому файлу.
+
+```bash
+cp private_features.csv data/
+docker compose run --rm --user "$(id -u):$(id -g)" api \
+  python -m agropulse.cli predict \
+    --input /app/data/private_features.csv \
+    --output /app/data/submission.csv
+
+# проверка формата перед загрузкой на платформу
+docker compose run --rm --user "$(id -u):$(id -g)" api \
+  python -m agropulse.cli validate \
+    --input /app/data/private_features.csv \
+    --submission /app/data/submission.csv
 ```
 
 Поиск территории без ручного ввода координат:

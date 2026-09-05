@@ -1,0 +1,66 @@
+/* Оформление PDF-отчётов. Единый файл для отчёта по полю и сводного. */
+
+@page {
+    size: A4;
+    margin: 18mm 16mm 20mm 16mm;
+    @bottom-center {
+        content: "AgroPulse · страница " counter(page) " из " counter(pages);
+        font-size: 8pt;
+        color: #888;
+    }
+}
+
+body {
+    font-family: "DejaVu Sans", sans-serif;
+    font-size: 10pt;
+    line-height: 1.45;
+    color: #1a1a1a;
+}
+
+h1 { font-size: 20pt; margin: 0 0 4mm 0; color: #14532d; }
+h2 { font-size: 13pt; margin: 7mm 0 2mm 0; color: #14532d;
+     border-bottom: 0.4mm solid #d7e3d9; padding-bottom: 1mm; }
+h3 { font-size: 11pt; margin: 4mm 0 1mm 0; }
+
+.cover { margin-bottom: 8mm; }
+.cover .subtitle { font-size: 12pt; color: #555; }
+.cover .meta { margin-top: 4mm; font-size: 9pt; color: #666; }
+
+table { width: 100%; border-collapse: collapse; margin: 2mm 0 3mm 0; font-size: 9pt; }
+
+/* Таблица очереди на осмотр: восемь колонок не помещаются в ширину A4
+   при обычном кегле, поэтому ширины задаются явно, а статус набирается
+   мелко — он и так выделен цветом. */
+table.queue { font-size: 8pt; table-layout: fixed; }
+table.queue th, table.queue td { padding: 1.2mm 1.2mm; word-wrap: break-word; }
+table.queue .col-rank { width: 6%; }
+table.queue .col-name { width: 24%; }
+table.queue .col-area { width: 10%; }
+table.queue .col-crop { width: 14%; }
+table.queue .col-status { width: 20%; }
+table.queue .col-num { width: 9%; }
+table.queue .status { font-size: 7.5pt; padding: 0.6mm 1.2mm; }
+th, td { text-align: left; padding: 1.4mm 2mm; border-bottom: 0.2mm solid #e3e3e3; }
+th { background: #f2f6f3; font-weight: bold; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+.status { display: inline-block; padding: 0.8mm 2.5mm; border-radius: 1mm;
+          font-size: 9pt; font-weight: bold; color: #fff; }
+.status-critical { background: #c62828; }
+.status-attention { background: #ef6c00; }
+.status-normal { background: #2e7d32; }
+.status-insufficient_data { background: #757575; }
+.status-pending, .status-failed { background: #9e9e9e; }
+
+.chart { margin: 2mm 0 4mm 0; }
+.chart svg { width: 100%; height: auto; }
+
+.note { background: #f7f7f4; border-left: 0.8mm solid #b6c8bb;
+        padding: 2mm 3mm; margin: 2mm 0; font-size: 9pt; }
+.warning { background: #fdf5e6; border-left-color: #ef6c00; }
+
+.muted { color: #777; font-size: 9pt; }
+ul { margin: 1mm 0 2mm 4mm; padding: 0; }
+li { margin-bottom: 0.8mm; }
+
+.page-break { page-break-before: always; }

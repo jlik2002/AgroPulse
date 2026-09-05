@@ -1,0 +1,138 @@
+<!-- Аналитический отчёт по одному полю. -->
+<html lang="ru">
+<head><meta charset="utf-8"><style>{{ css|safe }}</style></head>
+<body>
+
+<div class="cover">
+  <h1>{{ field.name }}</h1>
+  <div class="subtitle">Отчёт о состоянии поля по спутниковым данным</div>
+  <div class="meta">
+    {% if client %}Хозяйство: {{ client }}<br>{% endif %}
+    Период анализа: {{ period_from }} — {{ period_to }}<br>
+    Площадь: {{ field.area_ha }} га{% if field.crop %} · Культура: {{ field.crop }}{% endif %}
+    {%- if field.sowing_date %} · Дата посева: {{ field.sowing_date }}{% endif %}<br>
+    Отчёт сформирован: {{ generated_at }}
+  </div>
+</div>
+
+<h2>Состояние поля</h2>
+<p>
+  <span class="status status-{{ status }}">{{ status_title }}</span>
+  {% if risk_score is not none %}
+    &nbsp;Балл риска: <strong>{{ risk_score }}</strong> из 100
+    {% if risk_confidence %}<span class="muted">(уверенность {{ risk_confidence }})</span>{% endif %}
+  {% endif %}
+</p>
+
+{% if summary_text %}
+  <p>{{ summary_text }}</p>
+{% elif summary_skipped %}
+  <div class="note muted">Текстовое резюме не сформировано: {{ summary_skipped }}</div>
+{% endif %}
+
+{% if insufficient_reason %}
+  <div class="note warning">Оценка риска не выполнена: {{ insufficient_reason }}</div>
+{% endif %}
+
+<h2>Качество исходных данных</h2>
+<table>
+  <tr><th>Показатель</th><th>Значение</th></tr>
+  <tr><td>Спутниковых сцен за период</td><td class="num">{{ quality.scenes_total }}</td></tr>
+  <tr><td>Из них пригодных</td><td class="num">{{ quality.scenes_usable }}</td></tr>
+  <tr><td>Наблюдений в периоде анализа</td><td class="num">{{ quality.observed }}</td></tr>
+  <tr><td>Восстановленных значений</td><td class="num">{{ quality.restored }}</td></tr>
+  <tr><td>Средняя доля пригодных пикселей</td><td class="num">{{ quality.valid_fraction }}</td></tr>
+  <tr><td>Сезонов в климатической норме</td><td class="num">{{ quality.seasons }}</td></tr>
+  <tr><td>Источник спутниковых данных</td><td>{{ quality.satellite_source }}</td></tr>
+  <tr><td>Источник погоды</td><td>{{ quality.weather_source }}</td></tr>
+</table>
+
+<h2>Динамика вегетационного индекса</h2>
+<div class="chart">{{ ndvi_chart|safe }}</div>
+<p class="muted">
+  Сплошные точки — наблюдения по пригодным снимкам. Пунктир — значения,
+  восстановленные моделью. Точечная линия справа — прогноз с доверительным
+  интервалом. Красной заливкой отмечены аномальные периоды.
+</p>
+
+{% if weather_chart %}
+<h2>Погодный контекст</h2>
+<div class="chart">{{ weather_chart|safe }}</div>
+{% endif %}
+
+<div class="page-break"></div>
+
+<h2>Негативные аномальные периоды</h2>
+{% if anomalies %}
+  {% for anomaly in anomalies %}
+    <h3>{{ anomaly.start_date }} — {{ anomaly.end_date }} ({{ anomaly.duration_days }} дн.)</h3>
+    <table>
+      <tr><th>Показатель</th><th>Значение</th></tr>
+      <tr><td>Максимальное отклонение от нормы</td><td class="num">{{ anomaly.max_zscore }}</td></tr>
+      <tr><td>Уровень</td><td>{{ anomaly.severity_title }}</td></tr>
+      <tr><td>Доля восстановленных значений</td><td class="num">{{ anomaly.restored_fraction }}</td></tr>
+      <tr><td>Уверенность в событии</td><td class="num">{{ anomaly.confidence }}</td></tr>
+    </table>
+    {% if anomaly.phase_mismatch %}
+      <div class="note warning">
+        Динамика поля не совпадает с его собственной историей. Отклонение может
+        объясняться сменой культуры в севообороте или другими сроками сева,
+        а не угнетением растительности. Вывод требует подтверждения.
+      </div>
+    {% endif %}
+    {% if anomaly.explanation %}<p>{{ anomaly.explanation }}</p>{% endif %}
+    {% if anomaly.hypotheses %}
+      <p><strong>Возможные причины (гипотезы, требующие проверки):</strong></p>
+      <ul>{% for item in anomaly.hypotheses %}<li>{{ item }}</li>{% endfor %}</ul>
+    {% endif %}
+  {% endfor %}
+{% else %}
+  <p>Устойчивых негативных отклонений от собственной динамики поля не обнаружено.</p>
+{% endif %}
+
+{% if checklist %}
+<h2>Что проверить при выезде</h2>
+<ul>{% for item in checklist %}<li>{{ item }}</li>{% endfor %}</ul>
+{% endif %}
+
+<h2>Прогноз на {{ forecast.horizon_days }} суток</h2>
+{% if forecast.points %}
+  <table>
+    <tr><th>Показатель</th><th>Значение</th></tr>
+    <tr><td>Ожидаемая динамика</td><td>{{ forecast.direction_title }}</td></tr>
+    <tr><td>Уровень риска ухудшения</td><td>{{ forecast.risk_title }}</td></tr>
+    <tr><td>Уверенность прогноза</td><td class="num">{{ forecast.confidence }}</td></tr>
+    <tr><td>Источник</td><td>{{ forecast.model_version }}</td></tr>
+  </table>
+{% else %}
+  <p>Прогноз не сформирован: {{ forecast.insufficient_reason }}</p>
+{% endif %}
+
+{% if risk_chart %}
+<h2>Из чего сложилась оценка риска</h2>
+<div class="chart">{{ risk_chart|safe }}</div>
+{% if risk_explanation %}
+  <ul>{% for item in risk_explanation %}<li>{{ item }}</li>{% endfor %}</ul>
+{% endif %}
+{% endif %}
+
+<h2>Методика, источники и ограничения</h2>
+<p class="muted">
+  Вегетационный индекс NDVI рассчитан по снимкам Sentinel-2 (коллекция
+  {{ methodology.collection }}) как среднее по пригодным пикселям внутри контура
+  поля. Облачность отфильтрована по маске классов сцены и вероятностной маске
+  облаков. Погодные данные: {{ quality.weather_source }}. Ожидаемая динамика
+  построена по собственной истории поля за предыдущие сезоны; отклонение
+  измерено в единицах стандартного отклонения нормы.
+</p>
+<p class="muted">
+  Сервис даёт первичную дистанционную оценку и не заменяет обследование поля.
+  Указанные причины отклонений являются гипотезами. Сервис не ставит диагноз
+  по снимку, не измеряет влажность почвы напрямую и не прогнозирует урожайность.
+  {% if summary_text %}Пояснительный текст сформирован языковой моделью
+  на основе рассчитанных значений; все числа и даты в нём автоматически сверены
+  с исходными данными.{% endif %}
+</p>
+
+</body>
+</html>

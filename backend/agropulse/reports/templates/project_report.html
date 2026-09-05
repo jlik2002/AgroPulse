@@ -1,0 +1,109 @@
+<!-- Сводный отчёт по нескольким полям: очередь на осмотр для руководителя. -->
+<html lang="ru">
+<head><meta charset="utf-8"><style>{{ css|safe }}</style></head>
+<body>
+
+<div class="cover">
+  <h1>Сводный отчёт по хозяйству</h1>
+  <div class="subtitle">Приоритет выезда по результатам дистанционного мониторинга</div>
+  <div class="meta">
+    {% if client %}Хозяйство: {{ client }}<br>{% endif %}
+    Период анализа: {{ period_from }} — {{ period_to }}<br>
+    Полей обследовано: {{ total_fields }}<br>
+    Отчёт сформирован: {{ generated_at }}
+  </div>
+</div>
+
+<h2>Итоги</h2>
+<table>
+  <tr><th>Статус</th><th>Полей</th></tr>
+  <tr><td><span class="status status-critical">Критический</span></td><td class="num">{{ counts.critical }}</td></tr>
+  <tr><td><span class="status status-attention">Требует внимания</span></td><td class="num">{{ counts.attention }}</td></tr>
+  <tr><td><span class="status status-normal">Аномалий не обнаружено</span></td><td class="num">{{ counts.normal }}</td></tr>
+  <tr><td><span class="status status-insufficient_data">Недостаточно данных</span></td><td class="num">{{ counts.insufficient_data }}</td></tr>
+</table>
+
+{% if summary_text %}
+  <p>{{ summary_text }}</p>
+{% elif summary_skipped %}
+  <div class="note muted">Текстовая сводка не сформирована: {{ summary_skipped }}</div>
+{% endif %}
+
+<h2>Очередь на осмотр</h2>
+<table class="queue">
+  <tr>
+    <th class="col-rank">№</th>
+    <th class="col-name">Поле</th>
+    <th class="col-area">Площадь, га</th>
+    <th class="col-crop">Культура</th>
+    <th class="col-status">Статус</th>
+    <th class="col-num">Балл</th>
+    <th class="col-num">Аном.</th>
+    <th class="col-num">Набл.</th>
+  </tr>
+  {% for row in ranked %}
+  <tr>
+    <td class="num">{{ row.rank }}</td>
+    <td>{{ row.name }}</td>
+    <td class="num">{{ row.area_ha }}</td>
+    <td>{{ row.crop or "—" }}</td>
+    <td><span class="status status-{{ row.status }}">{{ row.status_title }}</span></td>
+    <td class="num">{{ row.risk_score }}</td>
+    <td class="num">{{ row.anomalies_count }}</td>
+    <td class="num">{{ row.observed_points }}</td>
+  </tr>
+  {% endfor %}
+</table>
+
+{% if without_risk %}
+<h2>Поля без надёжной оценки</h2>
+<p class="muted">
+  Этим участкам балл риска не выставлен: искусственная оценка при нехватке
+  данных вводила бы в заблуждение.
+</p>
+<table>
+  <tr><th>Поле</th><th>Площадь, га</th><th>Наблюдений</th><th>Причина</th></tr>
+  {% for row in without_risk %}
+  <tr>
+    <td>{{ row.name }}</td>
+    <td class="num">{{ row.area_ha }}</td>
+    <td class="num">{{ row.observed_points }}</td>
+    <td>{{ row.reason }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+<h2>Проблемные поля подробнее</h2>
+{% for card in cards %}
+  <h3>{{ card.name }}
+    <span class="status status-{{ card.status }}">{{ card.status_title }}</span></h3>
+  {% if card.worst %}
+    <p class="muted">
+      Наиболее серьёзное отклонение: {{ card.worst.start_date }} — {{ card.worst.end_date }},
+      {{ card.worst.duration_days }} дн., отклонение {{ card.worst.max_zscore }}.
+    </p>
+  {% endif %}
+  {% if card.explanation %}
+    <ul>{% for item in card.explanation %}<li>{{ item }}</li>{% endfor %}</ul>
+  {% endif %}
+  <div class="chart">{{ card.chart|safe }}</div>
+{% else %}
+  <p>Полей, требующих внимания, не обнаружено.</p>
+{% endfor %}
+
+<h2>Методика и ограничения</h2>
+<p class="muted">
+  NDVI рассчитан по снимкам Sentinel-2 как среднее по пригодным пикселям внутри
+  контура поля; облачность отфильтрована. Ожидаемая динамика построена
+  по собственной истории каждого поля за предыдущие сезоны. Балл риска
+  учитывает глубину и длительность отклонения, текущее состояние относительно
+  нормы, динамику индекса влажности и погодные факторы.
+</p>
+<p class="muted">
+  Сервис даёт первичную дистанционную оценку и не заменяет обследование поля.
+  Причины отклонений являются гипотезами и требуют проверки на месте.
+</p>
+
+</body>
+</html>
