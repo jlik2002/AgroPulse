@@ -245,6 +245,28 @@ def test_crop_rotation_is_recognised_by_curve_shape(healthy_climatology) -> None
     assert correlation < anomalies_module.PHASE_MISMATCH_CORRELATION
 
 
+def test_rotation_hypothesis_names_the_declared_crop(healthy_climatology) -> None:
+    """Гипотеза о севообороте называет культуру, заявленную на сезон.
+
+    Без неё читателю не с чем сопоставить расхождение: норма собрана
+    по прошлым сезонам того же поля, а что на нём сейчас — знает только
+    тот, кто завёл поле.
+    """
+    curve = [(day, round(PEAK + BARE_SOIL - value, 4)) for day, value in season_curve(2024)]
+
+    periods, _ = anomalies_module.detect(
+        samples_from(curve), healthy_climatology, None, crop="Кукуруза"
+    )
+
+    assert periods, "обратная кривая обязана дать хотя бы один период"
+    hypotheses = periods[0].factors["hypotheses"]
+    assert "Кукуруза" in hypotheses[0]
+
+    # Без культуры формулировка остаётся общей, но гипотеза не исчезает.
+    without_crop, _ = anomalies_module.detect(samples_from(curve), healthy_climatology, None)
+    assert "смена культуры" in without_crop[0].factors["hypotheses"][0]
+
+
 def test_matching_season_is_not_a_rotation(healthy_climatology) -> None:
     """Угнетённое поле повторяет форму своей нормы, просто идёт ниже."""
     curve = [(day, round(max(value - 0.1, 0.0), 4)) for day, value in season_curve(2024)]

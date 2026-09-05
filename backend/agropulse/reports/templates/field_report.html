@@ -9,7 +9,10 @@
   <div class="meta">
     {% if client %}Хозяйство: {{ client }}<br>{% endif %}
     Период анализа: {{ period_from }} — {{ period_to }}<br>
-    Площадь: {{ field.area_ha }} га{% if field.crop %} · Культура: {{ field.crop }}{% endif %}
+    {# Культура печатается всегда, даже когда её нет: в документе,
+       который уходит наружу, пропуск читается как недосмотр, а прямая
+       отметка «не указана» — как факт о данных. #}
+    Площадь: {{ field.area_ha }} га · Культура: {{ field.crop or "не указана" }}
     {%- if field.sowing_date %} · Дата посева: {{ field.sowing_date }}{% endif %}<br>
     Отчёт сформирован: {{ generated_at }}
   </div>

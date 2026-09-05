@@ -1,11 +1,10 @@
-import { useEffect, useState } from "react";
+import { Info } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
-import type { Field } from "@/api/types";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { Notice } from "@/components/ui/State";
 import { CROPS } from "@/lib/crops";
-import { Info } from "lucide-react";
 
 export interface FieldDraft {
   name: string;
@@ -16,36 +15,57 @@ export interface FieldDraft {
 interface FieldEditDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  field: Field | null;
+  /** Заготовка полей формы. При создании — из контура, при правке — из поля. */
+  initial: FieldDraft | null;
+  mode: "create" | "edit";
   onSubmit: (draft: FieldDraft) => void;
   saving?: boolean;
+  error?: string | null;
 }
 
-/** Карточка редактирования поля: название, культура, дата посева.
- *  Культура и дата посева необязательны — так требует продуктовый сценарий. */
+/** Карточка поля: название, культура, дата посева.
+ *
+ *  Один и тот же диалог обслуживает создание и правку. Это не экономия кода:
+ *  требования к набору данных у обоих случаев одинаковые, и раздвоение формы
+ *  быстро привело бы к тому, что при создании культуру спросить забыли.
+ *
+ *  Культура обязательна и относится к текущему сезону. Дата посева — нет:
+ *  на расчёт она не влияет, а знают её далеко не всегда. */
 export function FieldEditDialog({
   open,
   onOpenChange,
-  field,
+  initial,
+  mode,
   onSubmit,
   saving,
+  error,
 }: FieldEditDialogProps) {
   const [draft, setDraft] = useState<FieldDraft>({ name: "", crop: null, sowing_date: null });
 
+  // Заготовка применяется один раз на открытие. Сравнивать её по ссылке нельзя:
+  // родитель собирает объект на каждом рендере, и форма затирала бы ввод
+  // пользователя при любом обновлении списка полей.
+  const filled = useRef(false);
   useEffect(() => {
-    if (open && field) {
-      setDraft({ name: field.name, crop: field.crop, sowing_date: field.sowing_date });
+    if (!open) {
+      filled.current = false;
+      return;
     }
-  }, [open, field]);
+    if (!filled.current && initial) {
+      setDraft(initial);
+      filled.current = true;
+    }
+  }, [open, initial]);
 
-  const canSave = draft.name.trim().length > 0;
+  const creating = mode === "create";
+  const canSave = draft.name.trim().length > 0 && (draft.crop ?? "").trim().length > 0;
 
   return (
     <Modal
       open={open}
       onOpenChange={onOpenChange}
-      title="Параметры поля"
-      description="Культура и дата посева необязательны"
+      title={creating ? "Новое поле" : "Параметры поля"}
+      description="Культура — та, что растёт на поле в этом сезоне"
       className="w-[min(520px,calc(100vw-32px))]"
       footer={
         <div className="flex justify-end gap-3">
@@ -54,9 +74,15 @@ export function FieldEditDialog({
           </Button>
           <Button
             disabled={!canSave || saving}
-            onClick={() => onSubmit({ ...draft, name: draft.name.trim() })}
+            onClick={() =>
+              onSubmit({
+                ...draft,
+                name: draft.name.trim(),
+                crop: (draft.crop ?? "").trim() || null,
+              })
+            }
           >
-            {saving ? "Сохраняем…" : "Сохранить"}
+            {saving ? "Сохраняем…" : creating ? "Добавить поле" : "Сохранить"}
           </Button>
         </div>
       }
@@ -73,7 +99,9 @@ export function FieldEditDialog({
         </label>
 
         <label className="block">
-          <span className="mb-1.5 block text-[13px] text-ink-soft">Культура</span>
+          <span className="mb-1.5 block text-[13px] text-ink-soft">
+            Культура <span className="text-danger-ink">*</span>
+          </span>
           <input
             list="agro-crops"
             value={draft.crop ?? ""}
@@ -81,7 +109,8 @@ export function FieldEditDialog({
               setDraft((value) => ({ ...value, crop: event.target.value || null }))
             }
             className="h-11 w-full rounded-xl border border-line px-3.5 text-[14px] text-ink outline-none transition-colors focus:border-brand-400"
-            placeholder="Не указана"
+            placeholder="Выберите из списка или введите свою"
+            autoFocus={creating}
           />
           <datalist id="agro-crops">
             {CROPS.map((crop) => (
@@ -91,7 +120,9 @@ export function FieldEditDialog({
         </label>
 
         <label className="block">
-          <span className="mb-1.5 block text-[13px] text-ink-soft">Дата посева</span>
+          <span className="mb-1.5 block text-[13px] text-ink-soft">
+            Дата посева <span className="text-ink-muted">— если известна</span>
+          </span>
           <input
             type="date"
             value={draft.sowing_date ?? ""}
@@ -102,12 +133,14 @@ export function FieldEditDialog({
           />
         </label>
 
-        {!draft.crop ? (
-          <Notice icon={<Info size={16} />}>
-            Без культуры анализ будет основан на собственной истории поля: сезонная норма
-            строится по прошлым годам этого же участка.
-          </Notice>
-        ) : null}
+        {/* Объясняем не «что ввести», а зачем: норма поля собирается по его
+            прошлым сезонам, в которых культура могла быть другой. */}
+        <Notice icon={<Info size={16} />}>
+          Сезонная норма строится по прошлым годам этого же участка. Зная культуру текущего
+          сезона, мы отличаем севооборот от угнетения посевов.
+        </Notice>
+
+        {error ? <p className="text-[13px] text-danger-ink">{error}</p> : null}
       </div>
     </Modal>
   );

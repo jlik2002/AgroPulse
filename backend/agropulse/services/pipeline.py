@@ -95,6 +95,9 @@ class AnalysisContext:
 
     field_id: uuid.UUID
     project_id: uuid.UUID
+    # Культура текущего сезона, заявленная пользователем. Нужна в трёх местах:
+    # в запросе к сервису моделей, в трактовке расхождения с нормой и в отчёте.
+    crop: str | None
     sowing_date: date | None
     period_from: date
     period_to: date
@@ -333,6 +336,7 @@ class FieldPipeline:
             context = AnalysisContext(
                 field_id=field_id,
                 project_id=field.project_id,
+                crop=field.crop,
                 sowing_date=field.sowing_date,
                 period_from=field.project.period_from,
                 period_to=field.project.period_to,
@@ -484,6 +488,7 @@ class FieldPipeline:
                             for day, value in context.observed
                         ],
                         targets=gap_dates,
+                        crop_type=context.crop,
                     )
                 )
             )
@@ -515,7 +520,7 @@ class FieldPipeline:
                 exclude_year=context.period_to.year,
             )
             periods, zscores = anomalies_module.detect(
-                in_period, climatology, context.sowing_date
+                in_period, climatology, context.sowing_date, crop=context.crop
             )
             stage.message(
                 f"аномальных периодов: {len(periods)}"
@@ -562,6 +567,7 @@ class FieldPipeline:
                         for sample in samples
                     ],
                     horizon_days=horizon_days,
+                    crop_type=context.crop,
                     sowing_date=context.sowing_date,
                     weather_forecast=[
                         WeatherPoint(

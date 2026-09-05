@@ -10,7 +10,7 @@ import uuid
 from datetime import date, datetime
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from agropulse.db.models import FieldSource, FieldStatus, ValueType
 from agropulse.schemas.geo import PolygonGeometry
@@ -20,22 +20,52 @@ if TYPE_CHECKING:
     from agropulse.services.fields import FieldTimeseries
 
 
+def _clean_crop(value: str) -> str:
+    """Привести культуру к виду, пригодному для хранения и сравнения.
+
+    Отдельная функция, а не ограничение длины в поле: `min_length` пропускает
+    строку из одних пробелов, а она в отчёте выглядит как указанная культура,
+    хотя таковой не является.
+    """
+    cleaned = " ".join(value.split())
+    if not cleaned:
+        raise ValueError("культура не может быть пустой")
+    return cleaned
+
+
 class FieldCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     geometry: PolygonGeometry
-    # Культура и дата посева необязательны: без них выполняется общий анализ
-    # динамики, а культурно-специфичная интерпретация помечается недоступной.
-    crop: str | None = Field(default=None, max_length=100)
+    # Культура обязательна. Это продуктовое решение, а не техническое:
+    # указывается та культура, что растёт на поле в текущем сезоне. Норма
+    # строится по прошлым сезонам того же поля, в которых культура могла быть
+    # другой, — и без заявленной культуры расхождение с нормой невозможно
+    # отличить от севооборота. Она же уходит в сервис моделей и в отчёт.
+    crop: str = Field(min_length=1, max_length=100)
+    # Дата посева остаётся необязательной: на расчёт фазы она не влияет
+    # (см. докстроку `analytics.climatology`), а знают её далеко не всегда.
     sowing_date: date | None = None
     source: FieldSource = FieldSource.DRAWN
     external_ref: str | None = Field(default=None, max_length=100)
+
+    @field_validator("crop")
+    @classmethod
+    def _validate_crop(cls, value: str) -> str:
+        return _clean_crop(value)
 
 
 class FieldUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     geometry: PolygonGeometry | None = None
+    # `None` здесь значит «не менять», а не «стереть»: очистить культуру
+    # нельзя, раз при создании она обязательна.
     crop: str | None = Field(default=None, max_length=100)
     sowing_date: date | None = None
+
+    @field_validator("crop")
+    @classmethod
+    def _validate_crop(cls, value: str | None) -> str | None:
+        return None if value is None else _clean_crop(value)
 
 
 class ProcessingRequest(BaseModel):
@@ -55,6 +85,8 @@ class FieldRead(BaseModel):
     name: str
     geometry: PolygonGeometry
     area_ha: float | None
+    # В ответе культура остаётся необязательной: поля, заведённые до того, как
+    # она стала обязательной, существуют, и скрывать их интерфейс не должен.
     crop: str | None
     sowing_date: date | None
     source: FieldSource

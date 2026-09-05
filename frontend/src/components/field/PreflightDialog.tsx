@@ -26,8 +26,10 @@ interface PreflightDialogProps {
  *  квоту Earth Engine, поэтому, добавив одно поле к десяти уже посчитанным,
  *  пользователь должен иметь возможность посчитать только его.
  *
- *  Отсутствие культуры показывается предупреждением, но запуск не блокирует:
- *  анализ в этом случае опирается на собственную историю поля. */
+ *  Поле без культуры запуск блокирует. Такие поля остались от времени, когда
+ *  культура была необязательной: сейчас она указывается при добавлении поля,
+ *  и молча считать участок, про который неизвестно, что на нём растёт,
+ *  значит выпустить отчёт, который нечем защитить. */
 export function PreflightDialog({
   open,
   onOpenChange,
@@ -66,6 +68,7 @@ export function PreflightDialog({
   const chosenFields = fields.filter((field) => selected.has(field.id));
   const totalArea = chosenFields.reduce((sum, field) => sum + (field.area_ha ?? 0), 0);
   const withoutCrop = chosenFields.filter((field) => !field.crop);
+  const blocked = withoutCrop.length > 0;
 
   return (
     <Modal
@@ -81,7 +84,7 @@ export function PreflightDialog({
           <Button
             size="lg"
             onClick={() => onConfirm([...selected])}
-            disabled={starting || selected.size === 0}
+            disabled={starting || selected.size === 0 || blocked}
           >
             {starting ? "Запускаем…" : `Начать анализ · ${selected.size}`}
           </Button>
@@ -173,7 +176,7 @@ export function PreflightDialog({
           </ul>
         </section>
 
-        {withoutCrop.length > 0 ? (
+        {blocked ? (
           <div className="flex items-start gap-3 rounded-xl border border-warn-line bg-warn-soft px-4 py-3.5">
             <TriangleAlert size={18} className="mt-0.5 shrink-0 text-warn" />
             <p className="text-[13.5px] leading-relaxed text-ink-soft">
@@ -181,7 +184,8 @@ export function PreflightDialog({
                 ? `У поля «${withoutCrop[0].name}» не указана культура.`
                 : `У ${withoutCrop.length} ${fieldsWord(withoutCrop.length)} не указана культура.`}
               <br />
-              Анализ будет основан на собственной истории поля.
+              Укажите её в карточке поля или снимите отметку — без культуры расхождение
+              с нормой не отличить от севооборота.
             </p>
           </div>
         ) : null}

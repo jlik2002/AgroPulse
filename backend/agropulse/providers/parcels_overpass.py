@@ -33,6 +33,36 @@ QUERY_TIMEOUT_SECONDS = 90
 # и возвращает тысячи объектов, бесполезных для выбора одного поля.
 MAX_BBOX_DEGREES = 0.5
 
+# Перевод тега `crop`/`produce` на язык интерфейса. Раньше значение из OSM
+# уходило в форму как есть, и пользователь видел в поле «Культура» слово
+# «maize» — при необязательной культуре это была мелочь, при обязательной
+# подсказка обязана попадать в справочник, иначе её приходится перенабирать.
+#
+# Значение вне словаря не отбрасывается: тег остаётся подсказкой, а последнее
+# слово всё равно за пользователем — культуру он подтверждает при добавлении.
+OSM_CROPS = {
+    "wheat": "Пшеница озимая",
+    "winter_wheat": "Пшеница озимая",
+    "spring_wheat": "Пшеница яровая",
+    "barley": "Ячмень",
+    "maize": "Кукуруза",
+    "corn": "Кукуруза",
+    "sunflower": "Подсолнечник",
+    "soy": "Соя",
+    "soybean": "Соя",
+    "rape": "Рапс",
+    "rapeseed": "Рапс",
+    "canola": "Рапс",
+    "sugar_beet": "Сахарная свёкла",
+    "sugarbeet": "Сахарная свёкла",
+    "rice": "Рис",
+    "alfalfa": "Люцерна",
+    "lucerne": "Люцерна",
+    "potato": "Картофель",
+    "potatoes": "Картофель",
+    "fallow": "Пар",
+}
+
 
 @dataclass(slots=True)
 class Parcel:
@@ -135,9 +165,25 @@ def _element_to_parcel(element: dict) -> Parcel | None:
             geometry=mapping(polygon),
             area_ha=round(area, 3),
             name=tags.get("name"),
-            crop=tags.get("crop") or tags.get("produce"),
+            crop=_crop_from_tags(tags),
         )
     return None
+
+
+def _crop_from_tags(tags: dict) -> str | None:
+    """Достать культуру из тегов и назвать её так, как принято в интерфейсе.
+
+    В OSM допустим список через точку с запятой (`wheat;barley`). Берётся
+    первое значение: форма ждёт одну культуру текущего сезона, а не перечень
+    того, что на поле бывало.
+    """
+    raw = tags.get("crop") or tags.get("produce")
+    if not raw:
+        return None
+    first = raw.split(";")[0].strip()
+    if not first:
+        return None
+    return OSM_CROPS.get(first.lower(), first)
 
 
 def _ring_from_geometry(geometry: list | None) -> list[tuple[float, float]] | None:

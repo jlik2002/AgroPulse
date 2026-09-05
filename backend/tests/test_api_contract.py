@@ -172,7 +172,7 @@ def test_delete_project_removes_its_fields(client, created_field, db_session) ->
 def test_create_field_computes_area_and_returns_geojson(client, created_project) -> None:
     response = client.post(
         f"/api/projects/{created_project['id']}/fields",
-        json={"name": "Поле №1", "geometry": SQUARE_POLYGON},
+        json={"name": "Поле №1", "geometry": SQUARE_POLYGON, "crop": "Кукуруза"},
     )
 
     assert response.status_code == 201
@@ -180,6 +180,41 @@ def test_create_field_computes_area_and_returns_geojson(client, created_project)
     assert body["status"] == "pending"
     assert body["geometry"]["type"] == "Polygon"
     assert 130.0 < body["area_ha"] < 150.0
+
+
+def test_create_field_requires_current_crop(client, created_project) -> None:
+    """Культура текущего сезона обязательна.
+
+    Требование продуктовое: норма строится по прошлым сезонам того же поля,
+    в которых культура могла быть другой, и без заявленной культуры расхождение
+    с нормой невозможно отличить от севооборота.
+    """
+    response = client.post(
+        f"/api/projects/{created_project['id']}/fields",
+        json={"name": "Поле без культуры", "geometry": SQUARE_POLYGON},
+    )
+    assert response.status_code == 422
+
+    # Пробел культурой не является: иначе обязательность обходится вводом
+    # одного символа, а в отчёте появляется пустая строка вместо названия.
+    blank = client.post(
+        f"/api/projects/{created_project['id']}/fields",
+        json={"name": "Поле с пробелом", "geometry": SQUARE_POLYGON, "crop": "   "},
+    )
+    assert blank.status_code == 422
+
+
+def test_create_field_trims_crop(client, created_project) -> None:
+    response = client.post(
+        f"/api/projects/{created_project['id']}/fields",
+        json={
+            "name": "Поле с лишними пробелами",
+            "geometry": SQUARE_POLYGON,
+            "crop": "  Пшеница   озимая  ",
+        },
+    )
+    assert response.status_code == 201
+    assert response.json()["crop"] == "Пшеница озимая"
 
 
 def test_field_response_hides_internal_columns(client, created_field) -> None:
@@ -212,6 +247,7 @@ def test_field_keeps_reference_to_open_source_contour(client, created_project) -
         json={
             "name": "Контур из OSM",
             "geometry": SQUARE_POLYGON,
+            "crop": "Пшеница озимая",
             "source": "osm",
             "external_ref": "way/1462647786",
         },
@@ -233,7 +269,7 @@ def test_create_field_rejects_self_intersecting_polygon(client, created_project)
 
     response = client.post(
         f"/api/projects/{created_project['id']}/fields",
-        json={"name": "Восьмёрка", "geometry": bowtie},
+        json={"name": "Восьмёрка", "geometry": bowtie, "crop": "Ячмень"},
     )
 
     assert response.status_code == 422
@@ -251,7 +287,7 @@ def test_create_field_rejects_tiny_polygon(client, created_project) -> None:
 
     response = client.post(
         f"/api/projects/{created_project['id']}/fields",
-        json={"name": "Пятнышко", "geometry": speck},
+        json={"name": "Пятнышко", "geometry": speck, "crop": "Ячмень"},
     )
 
     assert response.status_code == 422
@@ -261,7 +297,7 @@ def test_create_field_rejects_tiny_polygon(client, created_project) -> None:
 def test_create_field_in_missing_project_returns_404(client) -> None:
     response = client.post(
         f"/api/projects/{uuid.uuid4()}/fields",
-        json={"name": "Поле", "geometry": SQUARE_POLYGON},
+        json={"name": "Поле", "geometry": SQUARE_POLYGON, "crop": "Ячмень"},
     )
 
     assert response.status_code == 404

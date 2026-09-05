@@ -116,7 +116,8 @@ export function useField(fieldId: string | undefined, options?: Options<Field>) 
 export interface CreateFieldPayload {
   name: string;
   geometry: PolygonGeometry;
-  crop?: string | null;
+  /** Культура текущего сезона. Обязательна: бэкенд отвечает 422 без неё. */
+  crop: string;
   sowing_date?: string | null;
   source?: "drawn" | "osm" | "worldcereal";
   external_ref?: string | null;

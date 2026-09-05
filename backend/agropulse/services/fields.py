@@ -21,7 +21,8 @@ logger = logging.getLogger(__name__)
 class CreateFieldCommand:
     name: str
     geometry: dict
-    crop: str | None = None
+    # Культура текущего сезона обязательна — см. `schemas/field.py`.
+    crop: str
     sowing_date: date | None = None
     source: FieldSource = FieldSource.DRAWN
     external_ref: str | None = None

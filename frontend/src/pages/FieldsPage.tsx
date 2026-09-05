@@ -43,6 +43,10 @@ export function FieldsPage() {
   const [parcels, setParcels] = useState<Parcel[]>([]);
   const [activeFieldId, setActiveFieldId] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
+  // Нарисованный или выбранный контур до того, как он стал полем. Поле теперь
+  // нельзя завести, не указав культуру текущего сезона, поэтому контур сначала
+  // попадает сюда и ждёт заполнения карточки.
+  const [pending, setPending] = useState<PendingField | null>(null);
   const [preflight, setPreflight] = useState(false);
   const [flyTo, setFlyTo] = useState<[number, number] | null>(null);
   const [regionBounds, setRegionBounds] = useState<LatLngBoundsExpression | null>(null);
@@ -105,21 +109,21 @@ export function FieldsPage() {
 
   const addGeometry = (geometry: PolygonGeometry, options?: Partial<Parcel>) => {
     const index = fields.length + 1;
-    createField.mutate(
-      {
+    // Рисование выключаем сразу: карточка перекрывает карту, и продолжать
+    // обводить контур под ней всё равно нельзя.
+    setTool("select");
+    setPending({
+      geometry,
+      source: options?.external_ref ? "osm" : "drawn",
+      external_ref: options?.external_ref ?? null,
+      draft: {
         name: options?.name ?? `Поле ${index}`,
-        geometry,
+        // Тег культуры из открытого источника — подсказка, а не факт:
+        // пользователь подтверждает или исправляет её в карточке.
         crop: options?.crop ?? null,
-        source: options?.external_ref ? "osm" : "drawn",
-        external_ref: options?.external_ref ?? null,
+        sowing_date: null,
       },
-      {
-        onSuccess: (field) => {
-          setActiveFieldId(field.id);
-          setTool("select");
-        },
-      },
-    );
+    });
   };
 
   const onRegionSelect = (region: Region) => {
@@ -136,6 +140,47 @@ export function FieldsPage() {
   };
 
   const editingField = fields.find((field) => field.id === editing) ?? null;
+  const dialogInitial: FieldDraft | null = pending
+    ? pending.draft
+    : editingField
+      ? {
+          name: editingField.name,
+          crop: editingField.crop,
+          sowing_date: editingField.sowing_date,
+        }
+      : null;
+
+  const closeDialog = () => {
+    setPending(null);
+    setEditing(null);
+  };
+
+  const submitDialog = (draft: FieldDraft) => {
+    if (pending) {
+      createField.mutate(
+        {
+          name: draft.name,
+          geometry: pending.geometry,
+          crop: draft.crop ?? "",
+          sowing_date: draft.sowing_date,
+          source: pending.source,
+          external_ref: pending.external_ref,
+        },
+        {
+          onSuccess: (field) => {
+            setActiveFieldId(field.id);
+            setPending(null);
+          },
+        },
+      );
+      return;
+    }
+    if (!editingField) return;
+    updateField.mutate(
+      { fieldId: editingField.id, payload: draft },
+      { onSuccess: () => setEditing(null) },
+    );
+  };
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -174,6 +219,17 @@ export function FieldsPage() {
                 />
               ))
             : null}
+
+          {/* Контур, который ещё заполняется в карточке. Без него после
+              рисования на карте не оставалось бы ничего: нарисованный слой
+              снимается сразу, а поля ещё нет. */}
+          {pending ? (
+            <FieldShape
+              geometry={pending.geometry}
+              style={{ color: "#FFFFFF", fillOpacity: 0.3, weight: 2.5, dashed: true }}
+              interactive={false}
+            />
+          ) : null}
 
           {fields.map((field, index) => (
             <FieldShape
@@ -323,9 +379,9 @@ export function FieldsPage() {
           </div>
 
           <Notice icon={<Info size={17} />} className="border-none bg-transparent px-0 py-0">
-            Без культуры анализ будет основан
+            Культура текущего сезона указана
             <br />
-            на собственной истории поля
+            у каждого поля — по ней отличаем севооборот
           </Notice>
 
           <Button
@@ -341,17 +397,17 @@ export function FieldsPage() {
       </aside>
 
       <FieldEditDialog
-        open={Boolean(editing)}
-        onOpenChange={(open) => !open && setEditing(null)}
-        field={editingField}
-        saving={updateField.isPending}
-        onSubmit={(draft: FieldDraft) => {
-          if (!editingField) return;
-          updateField.mutate(
-            { fieldId: editingField.id, payload: draft },
-            { onSuccess: () => setEditing(null) },
-          );
-        }}
+        open={Boolean(editing) || pending !== null}
+        onOpenChange={(open) => !open && closeDialog()}
+        mode={pending ? "create" : "edit"}
+        initial={dialogInitial}
+        saving={createField.isPending || updateField.isPending}
+        error={
+          pending
+            ? ((createField.error as Error | null)?.message ?? null)
+            : ((updateField.error as Error | null)?.message ?? null)
+        }
+        onSubmit={submitDialog}
       />
 
       <ConfirmDialog
@@ -392,6 +448,15 @@ export function FieldsPage() {
       />
     </div>
   );
+}
+
+/** Контур, ожидающий заполнения карточки: полем он станет после того,
+ *  как пользователь укажет культуру текущего сезона. */
+interface PendingField {
+  geometry: PolygonGeometry;
+  source: "drawn" | "osm";
+  external_ref: string | null;
+  draft: FieldDraft;
 }
 
 /** Минимальный зум, при котором поиск контуров осмыслен. */

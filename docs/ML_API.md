@@ -89,7 +89,7 @@
 |---|---|---|
 | `request_id` | string | Идентификатор запроса, возвращается в ответе для сопоставления |
 | `series[].polygon_id` | string | Идентификатор полигона |
-| `series[].crop_type` | string \| null | Культура, если известна |
+| `series[].crop_type` | string \| null | Культура текущего сезона. Обязательна при заведении поля, поэтому заполнена всегда, кроме полей, созданных до введения этого правила |
 | `series[].observations` | array | Весь доступный ряд полигона, включая строки с пропусками |
 | `observations[].primary_ndvi` | float \| null | `null` для дат, подлежащих восстановлению |
 | `observations[].features` | object | Признаки строки; состав описан в `expected_features` |
