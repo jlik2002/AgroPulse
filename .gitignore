@@ -235,3 +235,6 @@ node_modules/
 frontend/dist/
 frontend/*.tsbuildinfo
 frontend/.vite/
+
+# Черновики и материалы задачи 1: датасеты, PDF, эксперименты
+temp/
