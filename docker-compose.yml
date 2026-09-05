@@ -115,6 +115,7 @@ services:
               "--queues", "collect", "--concurrency", "4", "--loglevel", "info"]
     volumes:
       - ./backend:/app/backend
+      - ./data:/app/data:ro           # опорный набор задачи 1, только чтение
       - ./secrets:/run/secrets:ro
     depends_on:
       migrate:
@@ -133,6 +134,9 @@ services:
               "--queues", "analyze", "--concurrency", "2", "--loglevel", "info"]
     volumes:
       - ./backend:/app/backend
+      # Пропуски восстанавливает этот воркер, а признаки модели межполевые:
+      # без опорного набора задачи 1 расчёт не приближается, а выключается.
+      - ./data:/app/data:ro
       - ./secrets:/run/secrets:ro
     depends_on:
       migrate:
