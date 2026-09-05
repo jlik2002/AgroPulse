@@ -10,6 +10,14 @@
 
 Отдельное правило: полю с недостаточными данными риск не выставляется вовсе.
 Выдуманный балл хуже честного «данных не хватает» — он выглядит как знание.
+
+Недостаток данных — это отсутствие наблюдений, а не отсутствие истории.
+Раньше поле без собственной истории тоже получало «данных не хватает», потому
+что прежний детектор без нормы не умел находить события вовсе. Теперь умеет:
+движок по текущему ряду работает и без прошлых сезонов. Поэтому история влияет
+не на возможность оценки, а на то, из чего она складывается и насколько ей
+можно верить, — глубина отклонения берётся из балла движка, а уверенность
+снижается и причина проговаривается.
 """
 
 from __future__ import annotations
@@ -40,6 +48,10 @@ THRESHOLD_ATTENTION = 30.0
 # Ниже этого числа пригодных наблюдений вывод считается необеспеченным.
 MIN_OBSERVATIONS_FOR_RISK = 5
 
+# Во сколько раз снижается уверенность, когда сравнивать поле не с чем.
+# Оценка без истории опирается на один сезон: она возможна, но слабее.
+NO_HISTORY_CONFIDENCE_FACTOR = 0.7
+
 
 @dataclass(slots=True)
 class RiskAssessment:
@@ -69,27 +81,43 @@ def assess(
                 f"нужно минимум {MIN_OBSERVATIONS_FOR_RISK}"
             ),
         )
-    if not climatology_available:
-        return RiskAssessment(
-            score=None,
-            status=FieldStatus.INSUFFICIENT_DATA,
-            insufficient_reason="недостаточно собственной истории поля для построения нормы",
-        )
-
     breakdown: dict[str, float] = {}
     explanation: list[str] = []
+
+    # Оговорка про отсутствие истории добавляется в конце, первой строкой.
+    # Собирать её здесь вместе с находками нельзя: тогда «пояснений нет»
+    # перестало бы означать «отклонений не найдено».
+    no_history_note = (
+        None
+        if climatology_available
+        else (
+            "собственной истории поля нет: оценка построена по динамике текущего "
+            "сезона, сравнить поле с его нормой было не с чем"
+        )
+    )
 
     worst = min(anomalies, key=lambda a: a.max_zscore) if anomalies else None
 
     # --- сила отклонения ---
     if worst is not None:
-        # z = -3 и глубже считаем предельным случаем.
-        severity = min(abs(worst.max_zscore) / 3.0, 1.0)
+        if climatology_available:
+            # z = -3 и глубже считаем предельным случаем.
+            severity = min(abs(worst.max_zscore) / 3.0, 1.0)
+            explanation.append(
+                f"максимальное отклонение от нормы z={worst.max_zscore:.2f} "
+                f"({worst.start_date}—{worst.end_date})"
+            )
+        else:
+            # Без нормы z-score считать не от чего: «ниже обычного» здесь
+            # определено движком по самому ряду, и его балл уже сводит глубину,
+            # наклон и устойчивость отклонения в одну величину 0..100.
+            severity = min(max(worst.anomaly_score / 100.0, 0.0), 1.0)
+            explanation.append(
+                f"отклонение от собственной динамики сезона: балл "
+                f"{worst.anomaly_score:.0f} из 100 "
+                f"({worst.start_date}—{worst.end_date})"
+            )
         breakdown["anomaly_severity"] = round(severity * WEIGHTS["anomaly_severity"], 2)
-        explanation.append(
-            f"максимальное отклонение от нормы z={worst.max_zscore:.2f} "
-            f"({worst.start_date}—{worst.end_date})"
-        )
     else:
         breakdown["anomaly_severity"] = 0.0
 
@@ -112,12 +140,17 @@ def assess(
         # z = -2 в текущей фазе считаем предельным случаем.
         deviation = min(max(-recent_z / 2.0, 0.0), 1.0)
         breakdown["recent_trend"] = round(deviation * WEIGHTS["recent_trend"], 2)
+        # Без истории тот же z-score считается не от нормы поля, а от плавной
+        # кривой текущего сезона. Величина сопоставима, но называть её нормой
+        # нельзя: читатель решил бы, что поле сравнили с прошлыми годами.
+        baseline = "нормы" if climatology_available else "ожидаемой динамики сезона"
         if recent_z < -0.5:
             explanation.append(
-                f"состояние ниже нормы прямо сейчас: z={recent_z:.2f} по последним наблюдениям"
+                f"состояние ниже {baseline} прямо сейчас: "
+                f"z={recent_z:.2f} по последним наблюдениям"
             )
         elif recent_z > 0.5:
-            explanation.append(f"состояние выше нормы: z={recent_z:+.2f}")
+            explanation.append(f"состояние выше {baseline}: z={recent_z:+.2f}")
     else:
         breakdown["recent_trend"] = 0.0
 
@@ -167,6 +200,11 @@ def assess(
     )
     if phase_mismatch:
         confidence = round(confidence * 0.5, 3)
+    if not climatology_available:
+        # Вывод по одному сезону возможен, но проверить его прошлым нечем.
+        # Это снижает надёжность оценки, а не сам риск: причина уже названа
+        # первой строкой пояснения.
+        confidence = round(max(0.05, confidence * NO_HISTORY_CONFIDENCE_FACTOR), 3)
 
     if score >= THRESHOLD_CRITICAL:
         status = FieldStatus.CRITICAL
@@ -175,7 +213,14 @@ def assess(
     else:
         status = FieldStatus.NORMAL
         if not explanation:
-            explanation.append("устойчивых отклонений от собственной нормы поля не обнаружено")
+            explanation.append(
+                "устойчивых отклонений от собственной нормы поля не обнаружено"
+                if climatology_available
+                else "устойчивых отклонений от динамики текущего сезона не обнаружено"
+            )
+
+    if no_history_note is not None:
+        explanation.insert(0, no_history_note)
 
     return RiskAssessment(
         score=score,

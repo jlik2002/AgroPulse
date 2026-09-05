@@ -96,6 +96,15 @@ export interface Anomaly {
   severity: AnomalySeverity;
   max_zscore: number;
   mean_zscore: number | null;
+  /** Единый балл движка 0..100 — глубина и устойчивость отклонения. Это не
+   *  доверие: надёжность вывода лежит в `trust`. */
+  anomaly_score: number;
+  /** Разложение сигналов движка в пиковой точке. `historical_z` есть только
+   *  когда у поля доступна история за прошлые сезоны. */
+  level_z: number | null;
+  slope_z: number | null;
+  historical_z: number | null;
+  change_point_nearby: boolean;
   restored_fraction: number | null;
   /** Можно ли верить событию. Один сигнал вместо прежних трёх; основания
    *  вердикта лежат в `factors.trust`. */

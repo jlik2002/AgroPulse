@@ -20,6 +20,15 @@ class AnomalyRead(BaseModel):
     severity: AnomalySeverity
     max_zscore: float
     mean_zscore: float | None
+    # Единый балл движка 0..100. Это глубина и устойчивость отклонения, а не
+    # мера доверия: надёжность вывода отдельно, в `trust`.
+    anomaly_score: float
+    # Разложение сигналов движка в пиковой точке события. `historical_z` есть
+    # только при наличии истории поля, поэтому может быть null.
+    level_z: float | None
+    slope_z: float | None
+    historical_z: float | None
+    change_point_nearby: bool
     # Доля восстановленных точек внутри периода: чем выше, тем осторожнее вывод.
     restored_fraction: float | None
     # Можно ли верить событию: confirmed | unverified | disputed.
