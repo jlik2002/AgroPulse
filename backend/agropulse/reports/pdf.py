@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -68,6 +69,9 @@ RISK_LEVEL_TITLES = {
 
 SATELLITE_COLLECTION = "COPERNICUS/S2_SR_HARMONIZED"
 
+# Ключ раздела в закладке PDF, см. `_section_pages`.
+_SECTION_KEY = re.compile(r"[a-z_]+")
+
 VALUE_TYPE_TITLES = {
     "observed": "Наблюдаемое",
     "restored": "Восстановленное",
@@ -113,22 +117,52 @@ def _css() -> str:
 
 @dataclass(slots=True)
 class RenderedReport:
-    """Готовый документ вместе с числом страниц.
+    """Готовый документ вместе с разметкой страниц.
 
-    Количество страниц знает только вёрстка, и узнать его после сборки байтов
-    уже нельзя. Интерфейс показывает его на карточке готового файла, поэтому
-    считаем здесь, а не гадаем по размеру.
+    Количество страниц и расположение разделов знает только вёрстка, и узнать
+    их после сборки байтов уже нельзя. Интерфейс показывает число страниц на
+    карточке файла, а по `sections` строит оглавление с переходами.
+
+    `sections` — ключ раздела и номер страницы, где он начинается, в порядке
+    документа. Номер раздела и номер страницы не совпадают: раздел занимает
+    и полстраницы, и три, а часть разделов вообще выключена пользователем.
+    Интерфейс раньше приравнивал одно к другому и предлагал переход
+    на несуществующие страницы.
     """
 
     content: bytes
     pages: int
+    sections: list[tuple[str, int]]
 
 
 def _render_pdf(html: str) -> RenderedReport:
     from weasyprint import HTML
 
     document = HTML(string=html).render()
-    return RenderedReport(content=document.write_pdf(), pages=len(document.pages))
+    return RenderedReport(
+        content=document.write_pdf(),
+        pages=len(document.pages),
+        sections=_section_pages(document),
+    )
+
+
+def _section_pages(document) -> list[tuple[str, int]]:
+    """Разделы и страницы, на которых они начинаются.
+
+    Заголовки разделов помечены в шаблоне `data-section`, а CSS превращает их
+    в закладки PDF. Разбирать вёрстку самостоятельно не нужно: раскладка по
+    страницам — работа WeasyPrint, и только она знает результат.
+    """
+    pages: list[tuple[str, int]] = []
+    for label, target, *_ in document.make_bookmark_tree():
+        # Ключ раздела — латиница и подчёркивания. Всё остальное закладка
+        # не от нашего `data-section`, и в оглавлении ему не место: такой
+        # заголовок к тому же не пролезет в HTTP-заголовок ответа.
+        if not _SECTION_KEY.fullmatch(label):
+            continue
+        # target — (индекс страницы с нуля, x, y).
+        pages.append((label, target[0] + 1))
+    return pages
 
 
 def _round(value: float | None, digits: int = 2) -> float | None:

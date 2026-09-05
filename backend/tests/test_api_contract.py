@@ -472,6 +472,35 @@ def test_forecast_of_missing_field_returns_404(client) -> None:
     assert response.json()["error"]["code"] == "field_not_found"
 
 
+def test_report_exposes_section_pages(client, analyzed_field) -> None:
+    """Оглавление отчёта — с настоящими номерами страниц из вёрстки.
+
+    Номер раздела и номер страницы не совпадают: раздел занимает и полстраницы,
+    и три. Интерфейс приравнивал одно к другому и предлагал переход
+    на несуществующие страницы.
+    """
+    response = client.get(
+        f"/api/fields/{analyzed_field['id']}/report.pdf",
+        params={"sections": "state,anomalies,forecast"},
+    )
+
+    assert response.status_code == 200
+    total = int(response.headers["X-Report-Pages"])
+
+    entries = [
+        chunk.split(":") for chunk in response.headers["X-Report-Sections"].split(",")
+    ]
+    keys = [key for key, _ in entries]
+    pages = [int(page) for _, page in entries]
+
+    # Выключенных разделов в оглавлении нет, методика есть всегда.
+    assert "summary" not in keys
+    assert set(keys) >= {"state", "anomalies", "forecast", "methodology"}
+    # Разделы идут по порядку документа и умещаются в его страницы.
+    assert pages == sorted(pages)
+    assert all(1 <= page <= total for page in pages)
+
+
 def test_summary_ranks_fields_by_risk(client, analyzed_field, created_project) -> None:
     response = client.get(f"/api/projects/{created_project['id']}/summary")
 

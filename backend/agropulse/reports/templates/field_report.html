@@ -16,7 +16,7 @@
 </div>
 
 {% if "state" in sections %}
-<h2>Состояние поля</h2>
+<h2 data-section="state">Состояние поля</h2>
 <p>
   <span class="status status-{{ status }}">{{ status_title }}</span>
   {% if risk_score is not none %}
@@ -31,7 +31,7 @@
 {% endif %}
 
 {% if "summary" in sections %}
-<h2>Краткий вывод</h2>
+<h2 data-section="summary">Краткий вывод</h2>
 {% if summary_text %}
   <p>{{ summary_text }}</p>
 {% elif summary_skipped %}
@@ -40,7 +40,7 @@
 {% endif %}
 
 {% if "dynamics" in sections %}
-<h2>Динамика вегетационного индекса</h2>
+<h2 data-section="dynamics">Динамика вегетационного индекса</h2>
 <div class="chart">{{ ndvi_chart|safe }}</div>
 <p class="muted">
   Сплошные точки — наблюдения по пригодным снимкам. Пунктир — значения,
@@ -51,7 +51,7 @@
 {% endif %}
 
 {% if "quality" in sections %}
-<h2>Качество исходных данных</h2>
+<h2 data-section="quality">Качество исходных данных</h2>
 <table>
   <tr><th>Показатель</th><th>Значение</th></tr>
   <tr><td>Спутниковых сцен за период</td><td class="num">{{ quality.scenes_total }}</td></tr>
@@ -73,7 +73,7 @@
 {% if "anomalies" in sections %}
 <div class="page-break"></div>
 
-<h2>Негативные аномальные периоды</h2>
+<h2 data-section="anomalies">Негативные аномальные периоды</h2>
 {% if anomalies %}
   {% for anomaly in anomalies %}
     <h3>{{ anomaly.severity_title }}: {{ anomaly.start_date }} — {{ anomaly.end_date }}
@@ -109,7 +109,7 @@
 {% endif %}
 
 {% if "forecast" in sections %}
-<h2>Прогноз на {{ forecast.horizon_days }} суток</h2>
+<h2 data-section="forecast">Прогноз на {{ forecast.horizon_days }} суток</h2>
 {% if forecast.points %}
   <table>
     <tr><th>Показатель</th><th>Значение</th></tr>
@@ -134,7 +134,7 @@
 {% if "table" in sections %}
 <div class="page-break"></div>
 
-<h2>Полная таблица значений</h2>
+<h2 data-section="table">Полная таблица значений</h2>
 <table>
   <tr>
     <th>Дата</th><th>Тип значения</th><th class="num">NDVI</th><th class="num">NDMI</th>
@@ -154,7 +154,7 @@
 </table>
 {% endif %}
 
-<h2>Методика, источники и ограничения</h2>
+<h2 data-section="methodology">Методика, источники и ограничения</h2>
 <p class="muted">
   Вегетационный индекс NDVI рассчитан по снимкам Sentinel-2 (коллекция
   {{ methodology.collection }}) как среднее по пригодным пикселям внутри контура

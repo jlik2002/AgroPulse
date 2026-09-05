@@ -13,7 +13,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
-import { fetchBlob } from "@/api/client";
+import { fetchBlob, type ReportSection } from "@/api/client";
 import { useProjectContext } from "@/app/ProjectContext";
 import { Button } from "@/components/ui/Button";
 import { Card, CardHeader } from "@/components/ui/Card";
@@ -65,11 +65,24 @@ const PROJECT_SECTIONS = [
   "Методика и ограничения",
 ];
 
+/** Подписи по ключам, которыми бэкенд размечает страницы готового документа.
+ *  Часть разделов пользователь не выбирает — они есть в документе всегда. */
+const SECTION_LABELS: Record<string, string> = {
+  ...Object.fromEntries(FIELD_SECTIONS.map((section) => [section.key, section.label])),
+  methodology: "Методика и ограничения",
+  totals: "Итоги по проекту",
+  queue: "Очередь на осмотр",
+  uncertain: "Поля без надёжной оценки",
+  details: "Проблемные поля подробнее",
+};
+
 interface ReadyReport {
   url: string;
   name: string;
   size: number;
   pages: number | null;
+  /** Оглавление с настоящими номерами страниц, из вёрстки PDF. */
+  sections: ReportSection[];
   createdAt: Date;
 }
 
@@ -107,15 +120,24 @@ export function ReportsPage() {
     return () => URL.revokeObjectURL(ready.url);
   }, [ready]);
 
-  const structure = useMemo(
-    () =>
+  // До сборки это только состав будущего документа: на какой странице окажется
+  // раздел, знает вёрстка PDF, и до сборки этого не знает никто. После сборки
+  // приходит настоящее оглавление с номерами страниц.
+  const structure = useMemo(() => {
+    if (ready) {
+      return ready.sections.map((section) => ({
+        label: SECTION_LABELS[section.key] ?? section.key,
+        page: section.page,
+      }));
+    }
+    const titles =
       kind === "project"
         ? PROJECT_SECTIONS
         : FIELD_SECTIONS.filter((section) => sections.includes(section.key)).map(
             (section) => section.label,
-          ),
-    [kind, sections],
-  );
+          );
+    return titles.map((label) => ({ label, page: null as number | null }));
+  }, [ready, kind, sections]);
 
   const estimatedPages = useMemo(() => {
     if (kind === "project") return Math.max(2, Math.ceil(fields.length / 6) + 2);
@@ -150,6 +172,7 @@ export function ReportsPage() {
         name: result.name,
         size: result.blob.size,
         pages: result.pages,
+        sections: result.sections,
         createdAt: new Date(),
       });
       setActivePage(1);
@@ -451,23 +474,46 @@ export function ReportsPage() {
                 </span>
               </p>
               <ul className="space-y-2">
-                {structure.map((title, index) => (
-                  <li key={title}>
-                    <button
-                      type="button"
-                      onClick={() => setActivePage(Math.min(totalPages, index + 1))}
-                      className={cn(
-                        "flex w-full items-center gap-3 rounded-xl border px-3.5 py-2.5 text-left text-[14px] transition-colors",
-                        activePage === index + 1
-                          ? "border-brand-300 bg-brand-50 text-ink"
-                          : "border-line bg-white text-ink-soft hover:border-[#D6DAE0]",
+                {structure.map((item, index) => {
+                  // Раздел считается открытым, пока не начался следующий:
+                  // на одной странице их помещается несколько.
+                  const next = structure[index + 1]?.page ?? totalPages + 1;
+                  const active =
+                    item.page !== null && activePage >= item.page && activePage < next;
+                  const className = cn(
+                    "flex w-full items-center gap-3 rounded-xl border px-3.5 py-2.5 text-left text-[14px]",
+                    active
+                      ? "border-brand-300 bg-brand-50 text-ink"
+                      : "border-line bg-white text-ink-soft",
+                  );
+
+                  // До сборки переходить некуда: страниц ещё нет.
+                  return (
+                    <li key={`${item.label}-${index}`}>
+                      {item.page === null ? (
+                        <span className={className}>
+                          <span className="w-4 shrink-0 text-ink-muted tnum">{index + 1}</span>
+                          <span className="min-w-0 truncate">{item.label}</span>
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setActivePage(item.page as number)}
+                          className={cn(
+                            className,
+                            "transition-colors",
+                            !active && "hover:border-[#D6DAE0]",
+                          )}
+                        >
+                          <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                          <span className="shrink-0 text-[13px] text-ink-muted tnum">
+                            с. {item.page}
+                          </span>
+                        </button>
                       )}
-                    >
-                      <span className="w-4 shrink-0 text-ink-muted tnum">{index + 1}</span>
-                      <span className="min-w-0 truncate">{title}</span>
-                    </button>
-                  </li>
-                ))}
+                    </li>
+                  );
+                })}
               </ul>
             </aside>
           </div>

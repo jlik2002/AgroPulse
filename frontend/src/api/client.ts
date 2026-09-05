@@ -101,21 +101,41 @@ export async function downloadFile(
   return { name, size: blob.size };
 }
 
+/** Раздел документа и страница, с которой он начинается. */
+export interface ReportSection {
+  key: string;
+  page: number;
+}
+
 /** Получить файл, не сохраняя его: нужно для предпросмотра PDF в iframe. */
 export async function fetchBlob(
   path: string,
   query?: RequestOptions["query"],
-): Promise<{ blob: Blob; name: string; pages: number | null }> {
+): Promise<{ blob: Blob; name: string; pages: number | null; sections: ReportSection[] }> {
   const response = await fetch(apiUrl(path, query));
   if (!response.ok) throw await toApiError(response);
   const blob = await response.blob();
-  // Число страниц знает только вёрстка PDF, поэтому бэкенд отдаёт его заголовком.
+  // Разметку страниц знает только вёрстка PDF, поэтому бэкенд отдаёт её
+  // заголовками: число страниц и оглавление с номерами.
   const pages = Number(response.headers.get("X-Report-Pages"));
   return {
     blob,
     name: filenameFromDisposition(response.headers.get("Content-Disposition"), "report.pdf"),
     pages: Number.isFinite(pages) && pages > 0 ? pages : null,
+    sections: parseSections(response.headers.get("X-Report-Sections")),
   };
+}
+
+/** Разбор заголовка вида `state:1,summary:1,anomalies:3`. */
+function parseSections(header: string | null): ReportSection[] {
+  if (!header) return [];
+  const sections: ReportSection[] = [];
+  for (const chunk of header.split(",")) {
+    const [key, raw] = chunk.split(":");
+    const page = Number(raw);
+    if (key && Number.isFinite(page) && page > 0) sections.push({ key, page });
+  }
+  return sections;
 }
 
 function filenameFromDisposition(header: string | null, fallback: string): string {

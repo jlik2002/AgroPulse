@@ -31,14 +31,24 @@ def _as_response(document: ReportDocument) -> Response:
     headers = {
         "Content-Disposition": f"attachment; filename*=UTF-8''{quote(document.filename)}",
     }
+    exposed = ["Content-Disposition"]
+
     if document.pages is not None:
         # Интерфейс показывает число страниц на карточке готового файла.
         # Из тела PDF его не достать, поэтому отдаём заголовком.
         headers["X-Report-Pages"] = str(document.pages)
-        headers["Access-Control-Expose-Headers"] = "Content-Disposition, X-Report-Pages"
-    else:
-        headers["Access-Control-Expose-Headers"] = "Content-Disposition"
+        exposed.append("X-Report-Pages")
 
+    if document.sections:
+        # Оглавление: ключ раздела и номер страницы, где он начинается.
+        # Ключи латинские и цифры — заголовок остаётся ASCII, кодировать
+        # нечего. Названия разделов интерфейс знает сам.
+        headers["X-Report-Sections"] = ",".join(
+            f"{key}:{page}" for key, page in document.sections
+        )
+        exposed.append("X-Report-Sections")
+
+    headers["Access-Control-Expose-Headers"] = ", ".join(exposed)
     return Response(content=document.content, media_type=document.media_type, headers=headers)
 
 

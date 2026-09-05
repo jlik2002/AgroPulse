@@ -14,7 +14,7 @@
   </div>
 </div>
 
-<h2>Итоги</h2>
+<h2 data-section="totals">Итоги</h2>
 <table>
   <tr><th>Статус</th><th>Полей</th></tr>
   <tr><td><span class="status status-critical">Критический</span></td><td class="num">{{ counts.critical }}</td></tr>
@@ -29,7 +29,7 @@
   <div class="note muted">Текстовая сводка не сформирована: {{ summary_skipped }}</div>
 {% endif %}
 
-<h2>Очередь на осмотр</h2>
+<h2 data-section="queue">Очередь на осмотр</h2>
 <table class="queue">
   <tr>
     <th class="col-rank">№</th>
@@ -56,7 +56,7 @@
 </table>
 
 {% if without_risk %}
-<h2>Поля без надёжной оценки</h2>
+<h2 data-section="uncertain">Поля без надёжной оценки</h2>
 <p class="muted">
   Этим участкам балл риска не выставлен: искусственная оценка при нехватке
   данных вводила бы в заблуждение.
@@ -74,7 +74,7 @@
 </table>
 {% endif %}
 
-<h2>Проблемные поля подробнее</h2>
+<h2 data-section="details">Проблемные поля подробнее</h2>
 {% for card in cards %}
   <h3>{{ card.name }}
     <span class="status status-{{ card.status }}">{{ card.status_title }}</span></h3>
@@ -92,7 +92,7 @@
   <p>Полей, требующих внимания, не обнаружено.</p>
 {% endfor %}
 
-<h2>Методика и ограничения</h2>
+<h2 data-section="methodology">Методика и ограничения</h2>
 <p class="muted">
   NDVI рассчитан по снимкам Sentinel-2 как среднее по пригодным пикселям внутри
   контура поля; облачность отфильтрована. Ожидаемая динамика построена

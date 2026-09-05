@@ -14,6 +14,7 @@ import hashlib
 import logging
 import uuid
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import datetime
 
 from agropulse.db.uow import UnitOfWork
@@ -51,8 +52,10 @@ class ReportDocument:
     filename: str
     content: str | bytes
     media_type: str
-    # Число страниц знает только вёрстка PDF; для CSV остаётся None.
+    # Разметку страниц знает только вёрстка PDF; для CSV остаётся пусто.
     pages: int | None = None
+    # Ключ раздела и страница, с которой он начинается, в порядке документа.
+    sections: list[tuple[str, int]] = dataclass_field(default_factory=list)
 
 
 class ReportService:
@@ -100,6 +103,7 @@ class ReportService:
             content=document.content,
             media_type=PDF_MEDIA_TYPE,
             pages=document.pages,
+            sections=document.sections,
         )
 
     def project_pdf(self, project_id: uuid.UUID, client: str | None = None) -> ReportDocument:
@@ -112,6 +116,7 @@ class ReportService:
             content=document.content,
             media_type=PDF_MEDIA_TYPE,
             pages=document.pages,
+            sections=document.sections,
         )
 
     # ------------------------------------------------------------------
