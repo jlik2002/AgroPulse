@@ -1,6 +1,6 @@
 import { cn } from "@/lib/cn";
 
-export type LegendMark = "solid" | "dashed" | "dashed-dot" | "area" | "bar";
+export type LegendMark = "solid" | "dashed" | "dashed-dot" | "area" | "bar" | "span";
 
 export interface LegendItem {
   label: string;
@@ -29,6 +29,23 @@ function Mark({ mark, color }: { mark: LegendMark; color: string }) {
       <span
         className="block h-3.5 w-7 rounded-[3px]"
         style={{ backgroundColor: color, opacity: 0.35 }}
+      />
+    );
+  }
+
+  // Отрезок оси, выделенный заливкой с пунктирными границами: так на графике
+  // отмечен аномальный период. Без него в легенде красная полоса оставалась
+  // самым заметным элементом графика и единственным без объяснения.
+  if (mark === "span") {
+    return (
+      <span
+        className="block h-3.5 w-7 rounded-[2px]"
+        style={{
+          backgroundColor: color,
+          opacity: 0.45,
+          borderLeft: `1.5px dashed ${color}`,
+          borderRight: `1.5px dashed ${color}`,
+        }}
       />
     );
   }

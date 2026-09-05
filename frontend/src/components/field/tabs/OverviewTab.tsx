@@ -184,6 +184,17 @@ export function OverviewTab({ analysis, projectId, onOpenTab }: OverviewTabProps
                 items={[
                   { label: "Наблюдаемое", color: "#0F4730", mark: "solid" },
                   { label: "Ожидаемая динамика", color: "#9CA1AC", mark: "dashed" },
+                  // Красная заливка — самый заметный элемент графика, и до сих
+                  // пор единственный, который ничем не объяснялся.
+                  ...((analysis.anomalies.data?.length ?? 0) > 0
+                    ? [
+                        {
+                          label: "Отклонение от нормы",
+                          color: "#E5252C",
+                          mark: "span" as const,
+                        },
+                      ]
+                    : []),
                 ]}
               />
               <button

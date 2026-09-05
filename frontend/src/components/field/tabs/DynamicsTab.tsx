@@ -73,6 +73,9 @@ export function DynamicsTab({ analysis, onOpenScenes }: DynamicsTabProps) {
               ...(showExpected
                 ? [{ label: "Ожидаемая динамика", color: "#9CA1AC", mark: "dashed" as const }]
                 : []),
+              ...(anomalies.length > 0
+                ? [{ label: "Отклонение от нормы", color: "#E5252C", mark: "span" as const }]
+                : []),
               { label: "Прогноз", color: "#7B49BF", mark: "solid" },
               { label: "Диапазон прогноза", color: "#7B49BF", mark: "area" },
             ]}

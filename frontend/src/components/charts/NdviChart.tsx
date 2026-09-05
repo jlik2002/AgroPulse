@@ -4,9 +4,9 @@ import { useMemo } from "react";
 import type { Anomaly, Observation } from "@/api/types";
 import { CHART, TOOLTIP_BASE, valueScale } from "@/components/charts/echarts";
 import { EChart } from "@/components/charts/EChart";
-import { formatDayMonth, formatNumber, formatPercent, parseDate, toIsoDate } from "@/lib/format";
+import { daysWord, formatDayMonth, formatNumber, formatPercent, parseDate, toIsoDate } from "@/lib/format";
 import { expectedCurve } from "@/lib/series";
-import { VALUE_TYPE } from "@/lib/status";
+import { SEVERITY_TITLES, VALUE_TYPE } from "@/lib/status";
 
 // Минимальный размах оси NDVI. Просадка на 0,15 при таком размахе занимает
 // половину высоты и хорошо читается, а колебание на 0,01 остаётся плоским.
@@ -176,7 +176,12 @@ export function NdviChart({
           const stamp = items?.[0]?.axisValue;
           const point = stamp ? byDate.get(toIsoDate(new Date(stamp))) : undefined;
           if (!point) return "";
-          return tooltipHtml(point);
+          // Внутри красной области подсказка обязана сказать, что это за
+          // область: наводя курсор, пользователь спрашивает именно о ней.
+          const inside = anomalies.find(
+            (anomaly) => point.date >= anomaly.start_date && point.date <= anomaly.end_date,
+          );
+          return tooltipHtml(point, inside ?? null);
         },
       },
       xAxis: {
@@ -312,7 +317,7 @@ function isRecent(date: string | null | undefined): boolean {
 }
 
 /** Подсказка макета: дата, значение, тип происхождения и покрытие. */
-function tooltipHtml(point: Observation): string {
+function tooltipHtml(point: Observation, anomaly: Anomaly | null): string {
   const type = VALUE_TYPE[point.value_type];
   const rows: string[] = [
     `<div style="font-weight:600;margin-bottom:6px">${formatDayMonth(parseDate(point.date))}</div>`,
@@ -333,6 +338,15 @@ function tooltipHtml(point: Observation): string {
   } else if (point.missing_reason) {
     rows.push(
       `<div style="margin-top:3px;color:#7B808F">${escapeHtml(point.missing_reason)}</div>`,
+    );
+  }
+  if (anomaly) {
+    const severity = SEVERITY_TITLES[anomaly.severity];
+    rows.push(
+      `<div style="margin-top:7px;padding-top:6px;border-top:1px solid #EEF0F3;color:#B3161C">` +
+        `${escapeHtml(severity)}: NDVI ниже обычного для этого поля ` +
+        `${anomaly.duration_days} ${daysWord(anomaly.duration_days)} подряд` +
+        `</div>`,
     );
   }
   return rows.join("");

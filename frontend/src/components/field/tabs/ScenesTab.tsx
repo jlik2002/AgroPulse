@@ -1,4 +1,4 @@
-import { ArrowLeftRight, ChevronLeft, ChevronRight, CircleAlert, TrendingUp } from "lucide-react";
+import { ChevronLeft, ChevronRight, CircleAlert, TrendingUp } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { Anomaly, Field, Observation } from "@/api/types";
@@ -140,28 +140,10 @@ export function ScenesTab({ analysis, focus, onShowOnChart }: ScenesTabProps) {
       </Card>
 
       {/* --- панели сравнения --- */}
-      <div className={cn("relative grid gap-4", compare ? "grid-cols-2" : "grid-cols-1")}>
+      <div className={cn("grid gap-4", compare ? "grid-cols-2" : "grid-cols-1")}>
         <ScenePane field={field} scene={left} mode={mode} role={roleOf(left, scenes, worst)} />
         {compare ? (
-          <>
-            <ScenePane
-              field={field}
-              scene={right}
-              mode={mode}
-              role={roleOf(right, scenes, worst)}
-            />
-            <button
-              type="button"
-              aria-label="Поменять снимки местами"
-              onClick={() => {
-                setLeftDate(right.date);
-                setRightDate(left.date);
-              }}
-              className="absolute left-1/2 top-1/2 z-[600] flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-line bg-white text-ink shadow-pop transition-colors hover:bg-[#F3F4F6]"
-            >
-              <ArrowLeftRight size={18} />
-            </button>
-          </>
+          <ScenePane field={field} scene={right} mode={mode} role={roleOf(right, scenes, worst)} />
         ) : null}
       </div>
 
