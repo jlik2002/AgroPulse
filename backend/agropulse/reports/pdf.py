@@ -23,12 +23,13 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from agropulse.analytics import farm as farm_analytics
 from agropulse.analytics import radar as radar_module
 from agropulse.analytics.radar import RadarSample
 from agropulse.db.models import Anomaly, Field, ForecastRun, ValueType
 from agropulse.llm import narrative
 from agropulse.reports import charts
-from agropulse.reports.data import FieldData, ProjectData
+from agropulse.reports.data import FarmData, FieldData, ProjectData, RegistryData
 
 logger = logging.getLogger(__name__)
 
@@ -650,5 +651,261 @@ def build_project_report(data: ProjectData, client: str | None = None) -> Render
         ranked=ranked,
         without_risk=without_risk,
         cards=cards,
+    )
+    return _render_pdf(html)
+
+
+# ----------------------------------------------------------------------
+# Заключение по хозяйству
+# ----------------------------------------------------------------------
+
+
+def build_farm_report(data: FarmData) -> RenderedReport:
+    """Информационно-аналитическое заключение о состоянии угодий хозяйства.
+
+    Ничего не считает: индекс, достоверность и категория приходят готовыми
+    из `analytics/farm.py`. Иначе цифра в документе и цифра на экране
+    разошлись бы при первой правке формулы, а объяснить комиссии, какая
+    из них верная, было бы нечем.
+    """
+    assessment = data.assessment
+    rows, anomalies, forecasts, cards = [], [], [], []
+
+    ranked = sorted(
+        data.fields,
+        key=lambda item: (item.field.risk_score is None, -(item.field.risk_score or 0.0)),
+    )
+    position = 0
+    for item in ranked:
+        field = item.field
+        observed = _series(item, ValueType.OBSERVED)
+        breakdown = field.risk_breakdown or {}
+        if field.risk_score is not None:
+            position += 1
+
+        rows.append(
+            {
+                "rank": position if field.risk_score is not None else None,
+                "name": field.name,
+                "area_ha": _round(field.area_ha, 1),
+                "crop": field.crop,
+                "status": field.status.value,
+                "status_title": STATUS_TITLES.get(field.status.value, field.status.value),
+                "risk_score": field.risk_score,
+                "anomalies_count": len(item.anomalies),
+                "observed_points": len(observed),
+            }
+        )
+
+        for anomaly in item.anomalies:
+            anomalies.append(
+                {
+                    "field_name": field.name,
+                    "start_date": anomaly.start_date.isoformat(),
+                    "end_date": anomaly.end_date.isoformat(),
+                    "duration_days": anomaly.duration_days,
+                    "severity_title": SEVERITY_LEVELS.get(
+                        anomaly.severity.value, anomaly.severity.value
+                    ),
+                    "max_zscore": _round(anomaly.max_zscore),
+                    "trust_title": TRUST_TITLES.get(
+                        anomaly.trust or "", "не проверено"
+                    ),
+                }
+            )
+
+        run = item.forecast_run
+        if run is not None and run.insufficient_reason is None:
+            forecasts.append(
+                {
+                    "field_name": field.name,
+                    "direction": DIRECTION_TITLES.get(run.direction or "", "—"),
+                    "risk_level": RISK_LEVEL_TITLES.get(run.risk_level or "", "—"),
+                    "confidence": _round(run.confidence),
+                }
+            )
+
+        # Карточка с графиком только для проблемных полей: заключение должно
+        # оставаться обозримым, даже когда полей в хозяйстве десятки.
+        if field.status.value in ("critical", "attention"):
+            cards.append(
+                {
+                    "name": field.name,
+                    "status": field.status.value,
+                    "status_title": STATUS_TITLES.get(
+                        field.status.value, field.status.value
+                    ),
+                    "explanation": breakdown.get("explanation") or [],
+                    "chart": charts.ndvi_chart(
+                        observed,
+                        _series(item, ValueType.RESTORED),
+                        [],
+                        [(a.start_date, a.end_date) for a in item.anomalies],
+                    ),
+                }
+            )
+
+    # Отклонения по всему хозяйству — самые тяжёлые первыми: комиссия читает
+    # сверху и должна увидеть худшее, а не первое по алфавиту поле.
+    anomalies.sort(key=lambda item: item["max_zscore"] or 0.0)
+
+    category = assessment.category.value
+    html = _environment.get_template("farm_report.html").render(
+        css=_css(),
+        farm=data.farm,
+        assessment=assessment,
+        category_title=farm_analytics.CATEGORY_TITLES[category],
+        action=farm_analytics.CATEGORY_ACTIONS[category],
+        trust_title=farm_analytics.TRUST_TITLES[assessment.trust.value],
+        problem_percent=round(assessment.problem_share * 100),
+        period_from=data.period_from.isoformat(),
+        period_to=data.period_to.isoformat(),
+        generated_at=datetime.now().strftime("%d.%m.%Y %H:%M"),
+        fields=rows,
+        anomalies=anomalies,
+        forecasts=forecasts,
+        weather=_weather_background(data.fields),
+        cards=cards,
+    )
+    return _render_pdf(html)
+
+
+def _series(item: FieldData, value_type: ValueType) -> list[tuple]:
+    return [
+        (o.date, o.ndvi_mean)
+        for o in item.in_period
+        if o.value_type == value_type and o.ndvi_mean is not None
+    ]
+
+
+def _weather_background(fields: list[FieldData]) -> dict | None:
+    """Погодный фон хозяйства за период.
+
+    Значения сводятся по датам, а не по наблюдениям. Поля хозяйства лежат
+    рядом и получают одну и ту же погоду на дату: сложив осадки по всем
+    полям, документ показал бы сумму, умноженную на число полей.
+    """
+    by_date: dict[object, list[tuple[float | None, float | None]]] = {}
+    for item in fields:
+        for observation in item.in_period:
+            if observation.temperature is None and observation.precipitation is None:
+                continue
+            by_date.setdefault(observation.date, []).append(
+                (observation.temperature, observation.precipitation)
+            )
+    if not by_date:
+        return None
+
+    temperatures, precipitations = [], []
+    for values in by_date.values():
+        day_temperature = [t for t, _ in values if t is not None]
+        day_precipitation = [p for _, p in values if p is not None]
+        if day_temperature:
+            temperatures.append(sum(day_temperature) / len(day_temperature))
+        if day_precipitation:
+            precipitations.append(sum(day_precipitation) / len(day_precipitation))
+
+    if not temperatures and not precipitations:
+        return None
+    return {
+        "temperature_max": _round(max(temperatures), 1) if temperatures else "—",
+        "temperature_mean": (
+            _round(sum(temperatures) / len(temperatures), 1) if temperatures else "—"
+        ),
+        "precipitation_sum": _round(sum(precipitations), 1) if precipitations else "—",
+        "dry_days": sum(1 for value in precipitations if value < 0.5),
+    }
+
+
+# ----------------------------------------------------------------------
+# Реестр приоритетной поддержки
+# ----------------------------------------------------------------------
+
+
+def build_registry_report(data: RegistryData, client: str | None = None) -> RenderedReport:
+    """Реестр хозяйств, ранжированный по индексу потребности в поддержке."""
+    rows = [
+        {
+            "rank": entry.rank,
+            "name": entry.farm.name,
+            "district": entry.farm.district,
+            "area_ha": entry.assessment.total_area_ha,
+            "score": entry.assessment.support_need_score,
+            "reason": entry.assessment.reason,
+            "trust": entry.assessment.trust.value,
+            "trust_title": farm_analytics.TRUST_TITLES[entry.assessment.trust.value],
+            "action": farm_analytics.CATEGORY_ACTIONS[entry.assessment.category.value],
+        }
+        for entry in data.rows
+    ]
+
+    undetermined = [
+        {
+            "name": entry.farm.name,
+            "area_ha": entry.assessment.total_area_ha,
+            "fields_total": entry.assessment.fields_total,
+            "assessed_percent": round(entry.assessment.assessed_share * 100),
+            # Первая оговорка расчёта: она и объясняет, почему заключения нет.
+            "note": (
+                entry.assessment.notes[0]
+                if entry.assessment.notes
+                else "наблюдений за период недостаточно"
+            ),
+        }
+        for entry in data.undetermined
+    ]
+
+    every = data.rows + data.undetermined
+    counts = {
+        key: sum(1 for entry in every if entry.assessment.category.value == key)
+        for key in farm_analytics.CATEGORY_ACTIONS
+    }
+    categories = [
+        {
+            "key": key,
+            "title": farm_analytics.CATEGORY_TITLES[key],
+            "action": farm_analytics.CATEGORY_ACTIONS[key],
+            "farms": [
+                entry.farm.name
+                for entry in every
+                if entry.assessment.category.value == key
+            ],
+        }
+        for key in farm_analytics.CATEGORY_ACTIONS
+    ]
+
+    html = _environment.get_template("registry_report.html").render(
+        css=_css(),
+        client=client,
+        period_from=data.period_from.isoformat(),
+        period_to=data.period_to.isoformat(),
+        generated_at=datetime.now().strftime("%d.%m.%Y %H:%M"),
+        farms_total=len(every),
+        total_area_ha=_round(
+            sum(entry.assessment.total_area_ha for entry in every), 1
+        ),
+        problem_area_ha=_round(
+            sum(entry.assessment.problem_area_ha for entry in every), 1
+        ),
+        critical_area_ha=_round(
+            sum(entry.assessment.critical_area_ha for entry in every), 1
+        ),
+        unassessed_area_ha=_round(
+            sum(entry.assessment.unassessed_area_ha for entry in every), 1
+        ),
+        counts=counts,
+        rows=rows,
+        categories=categories,
+        undetermined=undetermined,
+        unassigned=[
+            {
+                "name": field.name,
+                "area_ha": _round(field.area_ha, 1),
+                "crop": field.crop,
+                "status": field.status.value,
+                "status_title": STATUS_TITLES.get(field.status.value, field.status.value),
+            }
+            for field in data.unassigned_fields
+        ],
     )
     return _render_pdf(html)

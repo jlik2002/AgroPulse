@@ -1,0 +1,188 @@
+<!-- Заключение по хозяйству: документ для комиссии, принимающей решение
+     о поддержке. Формулировки не называют сумму и не назначают выплату —
+     спутник видит угнетение растительности, а не основание для платежа. -->
+<html lang="ru">
+<head><meta charset="utf-8"><style>{{ css|safe }}</style></head>
+<body>
+
+<div class="cover">
+  <h1>Информационно-аналитическое заключение</h1>
+  <div class="subtitle">о состоянии сельскохозяйственных угодий хозяйства</div>
+  <div class="meta">
+    Хозяйство: {{ farm.name }}<br>
+    {% if farm.legal_form %}Организационно-правовая форма: {{ farm.legal_form }}<br>{% endif %}
+    {% if farm.inn %}ИНН: {{ farm.inn }}<br>{% endif %}
+    {% if farm.district %}Муниципальный район: {{ farm.district }}<br>{% endif %}
+    {% if farm.region %}Регион: {{ farm.region }}<br>{% endif %}
+    Период наблюдения: {{ period_from }} — {{ period_to }}<br>
+    Заключение сформировано: {{ generated_at }}
+  </div>
+</div>
+
+<div class="kpi">
+  <div class="kpi-item">
+    <div class="kpi-value">{{ assessment.support_need_score if assessment.support_need_score is not none else "—" }}</div>
+    <div class="kpi-label">индекс потребности в поддержке</div>
+  </div>
+  <div class="kpi-item">
+    <div class="kpi-value">{{ assessment.total_area_ha }}</div>
+    <div class="kpi-label">га всего</div>
+  </div>
+  <div class="kpi-item">
+    <div class="kpi-value">{{ assessment.fields_total }}</div>
+    <div class="kpi-label">полей под наблюдением</div>
+  </div>
+  <div class="kpi-item">
+    <div class="kpi-value">{{ problem_percent }}%</div>
+    <div class="kpi-label">доля проблемной площади</div>
+  </div>
+</div>
+
+<h2 data-section="verdict">Оценка и рекомендуемая форма реакции</h2>
+<table>
+  <tr><th>Показатель</th><th>Значение</th></tr>
+  <tr><td>Спутниковая ситуация</td>
+      <td><span class="badge cat-{{ assessment.category.value }}">{{ category_title }}</span></td></tr>
+  <tr><td>Рекомендуемая форма реакции</td><td>{{ action }}</td></tr>
+  <tr><td>Достоверность заключения</td>
+      <td><span class="badge trust-{{ assessment.trust.value }}">{{ trust_title }}</span></td></tr>
+  <tr><td>Оценено площади</td>
+      <td class="num">{{ assessment.assessed_area_ha }} га из {{ assessment.total_area_ha }} га</td></tr>
+  <tr><td>Площадь без заключения</td>
+      <td class="num">{{ assessment.unassessed_area_ha }} га</td></tr>
+  <tr><td>Средневзвешенный по площади риск</td>
+      <td class="num">{{ assessment.weighted_risk if assessment.weighted_risk is not none else "—" }}</td></tr>
+  <tr><td>Максимальный риск отдельного поля</td>
+      <td class="num">{{ assessment.max_field_risk if assessment.max_field_risk is not none else "—" }}</td></tr>
+  {% if assessment.reason %}<tr><td>Основная причина</td><td>{{ assessment.reason }}</td></tr>{% endif %}
+</table>
+
+{% if assessment.notes %}
+<div class="note warning">
+  <ul>{% for note in assessment.notes %}<li>{{ note }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<div class="note">
+  Спутниковые данные указывают на состояние посевов и не являются основанием
+  для назначения выплаты. Решение о форме и объёме поддержки принимает комиссия.
+</div>
+
+<h2 data-section="fields">Поля и площади</h2>
+<table class="queue">
+  <tr>
+    <th class="col-rank">№</th>
+    <th class="col-name">Поле</th>
+    <th class="col-area">Площадь, га</th>
+    <th class="col-crop">Культура</th>
+    <th class="col-status">Состояние</th>
+    <th class="col-num">Балл</th>
+    <th class="col-num">Аном.</th>
+    <th class="col-num">Набл.</th>
+  </tr>
+  {% for row in fields %}
+  <tr>
+    <td class="num">{{ row.rank or "—" }}</td>
+    <td>{{ row.name }}</td>
+    <td class="num">{{ row.area_ha }}</td>
+    <td>{{ row.crop or "не указана" }}</td>
+    <td><span class="status status-{{ row.status }}">{{ row.status_title }}</span></td>
+    <td class="num">{{ row.risk_score if row.risk_score is not none else "—" }}</td>
+    <td class="num">{{ row.anomalies_count }}</td>
+    <td class="num">{{ row.observed_points }}</td>
+  </tr>
+  {% endfor %}
+</table>
+
+<h2 data-section="anomalies">Отклонения: даты, длительность, подтверждение</h2>
+{% if anomalies %}
+<table>
+  <tr>
+    <th>Поле</th><th>Период</th><th>Дней</th><th>Тяжесть</th>
+    <th>Отклонение</th><th>Доверие</th>
+  </tr>
+  {% for item in anomalies %}
+  <tr>
+    <td>{{ item.field_name }}</td>
+    <td>{{ item.start_date }} — {{ item.end_date }}</td>
+    <td class="num">{{ item.duration_days }}</td>
+    <td>{{ item.severity_title }}</td>
+    <td class="num">{{ item.max_zscore }}</td>
+    <td>{{ item.trust_title }}</td>
+  </tr>
+  {% endfor %}
+</table>
+<p class="muted">
+  Доверие показывает, сошлись ли на событии независимые источники: радар
+  Sentinel-1, динамика индекса влажности и погода. «Не проверено» означает,
+  что сверять было нечем, а не что событие ложное.
+</p>
+{% else %}
+<p>Устойчивых отклонений от собственной нормы полей за период не обнаружено.</p>
+{% endif %}
+
+{% if weather %}
+<h2 data-section="weather">Погодный фон</h2>
+<table>
+  <tr><th>Показатель</th><th>Значение за период</th></tr>
+  <tr><td>Максимальная температура</td><td class="num">{{ weather.temperature_max }} °C</td></tr>
+  <tr><td>Средняя температура</td><td class="num">{{ weather.temperature_mean }} °C</td></tr>
+  <tr><td>Сумма осадков</td><td class="num">{{ weather.precipitation_sum }} мм</td></tr>
+  <tr><td>Дней без осадков</td><td class="num">{{ weather.dry_days }}</td></tr>
+</table>
+<p class="muted">
+  Погода приведена по датам наблюдений и характеризует фон, а не причину:
+  совпадение засушливого периода с отклонением остаётся гипотезой.
+</p>
+{% endif %}
+
+<h2 data-section="forecast">Прогноз на 14 дней</h2>
+{% if forecasts %}
+<table>
+  <tr><th>Поле</th><th>Направление</th><th>Уровень риска</th><th>Уверенность</th></tr>
+  {% for item in forecasts %}
+  <tr>
+    <td>{{ item.field_name }}</td>
+    <td>{{ item.direction }}</td>
+    <td>{{ item.risk_level }}</td>
+    <td class="num">{{ item.confidence }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="muted">Прогноз не сформирован ни по одному полю: данных за период недостаточно.</p>
+{% endif %}
+
+{% if cards %}
+<h2 data-section="details">Проблемные поля подробнее</h2>
+{% for card in cards %}
+  <h3>{{ card.name }}
+    <span class="status status-{{ card.status }}">{{ card.status_title }}</span></h3>
+  {% if card.explanation %}
+    <ul>{% for item in card.explanation %}<li>{{ item }}</li>{% endfor %}</ul>
+  {% endif %}
+  <div class="chart">{{ card.chart|safe }}</div>
+{% endfor %}
+{% endif %}
+
+<h2 data-section="methodology">Методика и ограничения</h2>
+<p class="muted">
+  NDVI рассчитан по снимкам Sentinel-2 как среднее по пригодным пикселям внутри
+  контура поля, облачность отфильтрована. Ожидаемая динамика построена
+  по собственной истории каждого поля за предыдущие сезоны, поэтому заявленная
+  культура текущего сезона существенна: без неё расхождение с нормой неотличимо
+  от севооборота.
+</p>
+<p class="muted">
+  Индекс потребности в поддержке — средневзвешенный по площади риск полей
+  с надбавками за долю критической и проблемной площади. Поля с недостаточными
+  данными в него не входят: их площадь показана отдельно и понижает
+  достоверность заключения, а не балл.
+</p>
+<p class="muted">
+  Сервис даёт первичную дистанционную оценку и не заменяет обследование
+  хозяйства. Причины отклонений являются гипотезами и требуют проверки на месте.
+</p>
+
+</body>
+</html>

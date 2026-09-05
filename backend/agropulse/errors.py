@@ -56,6 +56,16 @@ class FieldNotFoundError(NotFoundError):
     message = "поле не найдено"
 
 
+class FarmNotFoundError(NotFoundError):
+    code = "farm_not_found"
+    message = "хозяйство не найдено"
+
+
+class ReportNotFoundError(NotFoundError):
+    code = "report_not_found"
+    message = "документ не найден"
+
+
 # ----------------------------------------------------------------------
 # Некорректный запрос
 # ----------------------------------------------------------------------
@@ -84,6 +94,18 @@ class InvalidPeriodError(ValidationError):
 
     code = "invalid_period"
     message = "период короче 14 дней: временной ряд будет непоказательным"
+
+
+class DuplicateFarmNameError(ValidationError):
+    """Хозяйство с таким названием в проекте уже есть.
+
+    Отдельная ошибка, а не нарушение уникального ключа: имя вводится руками,
+    совпадение — обычное дело, и человек должен увидеть внятный текст,
+    а не пятисотку от базы.
+    """
+
+    code = "farm_name_taken"
+    message = "хозяйство с таким названием уже есть в проекте"
 
 
 class EmptyProjectError(AppError):

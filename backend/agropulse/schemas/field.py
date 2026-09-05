@@ -36,6 +36,10 @@ def _clean_crop(value: str) -> str:
 class FieldCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     geometry: PolygonGeometry
+    # Хозяйство обязательно. Решение о поддержке принимается по хозяйству
+    # целиком, и поле без владельца не попадает ни в одну строку реестра —
+    # то есть просто исчезает из государственного сценария.
+    farm_id: uuid.UUID
     # Культура обязательна. Это продуктовое решение, а не техническое:
     # указывается та культура, что растёт на поле в текущем сезоне. Норма
     # строится по прошлым сезонам того же поля, в которых культура могла быть
@@ -57,6 +61,9 @@ class FieldCreate(BaseModel):
 class FieldUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     geometry: PolygonGeometry | None = None
+    # Смена хозяйства — это перенос поля. `None` значит «не менять»: отвязать
+    # поле от хозяйства через API нельзя, раз при создании оно обязательно.
+    farm_id: uuid.UUID | None = None
     # `None` здесь значит «не менять», а не «стереть»: очистить культуру
     # нельзя, раз при создании она обязательна.
     crop: str | None = Field(default=None, max_length=100)
@@ -82,6 +89,10 @@ class ProcessingRequest(BaseModel):
 class FieldRead(BaseModel):
     id: uuid.UUID
     project_id: uuid.UUID
+    # В ответе хозяйство необязательно: поля, заведённые до его появления,
+    # существуют, и прятать их интерфейс не должен — он показывает их
+    # отдельной группой и предлагает перенести.
+    farm_id: uuid.UUID | None
     name: str
     geometry: PolygonGeometry
     area_ha: float | None
@@ -109,6 +120,7 @@ class FieldRead(BaseModel):
         return cls(
             id=field.id,
             project_id=field.project_id,
+            farm_id=field.farm_id,
             name=field.name,
             geometry=PolygonGeometry.model_validate(to_geojson(field.geom)),
             area_ha=field.area_ha,

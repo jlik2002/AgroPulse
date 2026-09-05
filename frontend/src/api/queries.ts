@@ -13,14 +13,18 @@ import {
 import { request } from "@/api/client";
 import type {
   Anomaly,
+  Farm,
+  FarmSummary,
   Field,
   Forecast,
+  GeneratedReport,
   Parcel,
   PolygonGeometry,
   Project,
   ProjectSummary,
   RadarSeries,
   Region,
+  Registry,
   Risk,
   Timeseries,
 } from "@/api/types";
@@ -36,6 +40,14 @@ export const keys = {
   risk: (id: string) => ["risk", id] as const,
   forecast: (id: string) => ["forecast", id] as const,
   summary: (projectId: string) => ["summary", projectId] as const,
+  // Справочник хозяйств общий, поэтому ключ без проекта.
+  farms: ["farms"] as const,
+  farm: (id: string) => ["farm", id] as const,
+  farmSummary: (projectId: string, farmId: string) =>
+    ["farm-summary", projectId, farmId] as const,
+  registry: (projectId: string) => ["registry", projectId] as const,
+  farmReports: (id: string) => ["farm-reports", id] as const,
+  projectReports: (projectId: string) => ["project-reports", projectId] as const,
   regions: (q: string) => ["regions", q] as const,
 };
 
@@ -116,6 +128,8 @@ export function useField(fieldId: string | undefined, options?: Options<Field>) 
 export interface CreateFieldPayload {
   name: string;
   geometry: PolygonGeometry;
+  /** Хозяйство-владелец. Обязательно: бэкенд отвечает 422 без него. */
+  farm_id: string;
   /** Культура текущего сезона. Обязательна: бэкенд отвечает 422 без неё. */
   crop: string;
   sowing_date?: string | null;
@@ -128,13 +142,18 @@ export function useCreateField(projectId: string) {
   return useMutation({
     mutationFn: (payload: CreateFieldPayload) =>
       request<Field>(`/projects/${projectId}/fields`, { method: "POST", body: payload }),
-    onSuccess: () => client.invalidateQueries({ queryKey: keys.fields(projectId) }),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: keys.fields(projectId) });
+      client.invalidateQueries({ queryKey: keys.registry(projectId) });
+    },
   });
 }
 
 export interface UpdateFieldPayload {
   name?: string;
   geometry?: PolygonGeometry;
+  /** Перенос поля в другое хозяйство. На расчёт не влияет. */
+  farm_id?: string;
   crop?: string | null;
   sowing_date?: string | null;
 }
@@ -158,9 +177,13 @@ export function useUpdateField(projectId: string) {
         keys.risk(field.id),
         keys.forecast(field.id),
         keys.summary(projectId),
+        // Перенос поля меняет состав хозяйств, а правка культуры — их баллы:
+        // реестр и карточка хозяйства считаются по полям и обязаны обновиться.
+        keys.registry(projectId),
       ]) {
         client.invalidateQueries({ queryKey: key });
       }
+      client.invalidateQueries({ queryKey: ["farm-summary"] });
     },
   });
 }
@@ -169,7 +192,127 @@ export function useDeleteField(projectId: string) {
   const client = useQueryClient();
   return useMutation({
     mutationFn: (fieldId: string) => request<void>(`/fields/${fieldId}`, { method: "DELETE" }),
-    onSuccess: () => client.invalidateQueries({ queryKey: keys.fields(projectId) }),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: keys.fields(projectId) });
+      client.invalidateQueries({ queryKey: keys.registry(projectId) });
+      client.invalidateQueries({ queryKey: ["farm-summary"] });
+    },
+  });
+}
+
+// --- хозяйства ------------------------------------------------------------
+
+/** Весь справочник хозяйств. Отбора по проекту нет намеренно: одно и то же
+ *  предприятие должно быть доступно из любого проекта, иначе его приходится
+ *  заводить заново под каждый период наблюдения. */
+export function useFarms(options?: Options<Farm[]>) {
+  return useQuery({
+    queryKey: keys.farms,
+    queryFn: () => request<Farm[]>("/farms"),
+    ...options,
+  });
+}
+
+export function useFarm(farmId: string | undefined, options?: Options<Farm>) {
+  return useQuery({
+    queryKey: keys.farm(farmId ?? ""),
+    queryFn: () => request<Farm>(`/farms/${farmId}`),
+    enabled: Boolean(farmId),
+    ...options,
+  });
+}
+
+export interface FarmPayload {
+  name: string;
+  inn?: string | null;
+  legal_form?: string | null;
+  district?: string | null;
+  region?: string | null;
+  contact?: string | null;
+  note?: string | null;
+}
+
+export function useCreateFarm(projectId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: FarmPayload) =>
+      request<Farm>("/farms", { method: "POST", body: payload }),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: keys.farms });
+      client.invalidateQueries({ queryKey: keys.registry(projectId) });
+    },
+  });
+}
+
+export function useUpdateFarm(projectId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ farmId, payload }: { farmId: string; payload: FarmPayload }) =>
+      request<Farm>(`/farms/${farmId}`, { method: "PATCH", body: payload }),
+    onSuccess: (farm) => {
+      client.setQueryData(keys.farm(farm.id), farm);
+      client.invalidateQueries({ queryKey: keys.farms });
+      client.invalidateQueries({ queryKey: keys.registry(projectId) });
+      client.invalidateQueries({ queryKey: ["farm-summary"] });
+    },
+  });
+}
+
+export function useDeleteFarm(projectId: string) {
+  const client = useQueryClient();
+  return useMutation({
+    // Ответ несёт число полей, оставшихся без хозяйства: интерфейс обязан
+    // сказать о них, иначе они молча выпадут из реестра.
+    mutationFn: (farmId: string) =>
+      request<{ orphaned_fields: number }>(`/farms/${farmId}`, { method: "DELETE" }),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: keys.farms });
+      client.invalidateQueries({ queryKey: keys.fields(projectId) });
+      client.invalidateQueries({ queryKey: keys.registry(projectId) });
+    },
+  });
+}
+
+/** Заключение по хозяйству за период проекта. Проект в адресе обязателен:
+ *  справочник общий, а период наблюдения лежит на проекте. */
+export function useFarmSummary(
+  projectId: string | undefined,
+  farmId: string | undefined,
+  options?: Options<FarmSummary>,
+) {
+  return useQuery({
+    queryKey: keys.farmSummary(projectId ?? "", farmId ?? ""),
+    queryFn: () =>
+      request<FarmSummary>(`/projects/${projectId}/farms/${farmId}/summary`),
+    enabled: Boolean(projectId && farmId),
+    ...options,
+  });
+}
+
+export function useRegistry(projectId: string | undefined, options?: Options<Registry>) {
+  return useQuery({
+    queryKey: keys.registry(projectId ?? ""),
+    queryFn: () => request<Registry>(`/projects/${projectId}/registry`),
+    enabled: Boolean(projectId),
+    ...options,
+  });
+}
+
+// --- сформированные документы --------------------------------------------
+
+export function useFarmReports(farmId: string | undefined) {
+  return useQuery({
+    queryKey: keys.farmReports(farmId ?? ""),
+    queryFn: () => request<GeneratedReport[]>(`/farms/${farmId}/reports`),
+    enabled: Boolean(farmId),
+  });
+}
+
+export function useProjectReports(projectId: string | undefined) {
+  return useQuery({
+    queryKey: keys.projectReports(projectId ?? ""),
+    queryFn: () => request<GeneratedReport[]>(`/projects/${projectId}/reports`),
+    enabled: Boolean(projectId),
   });
 }
 

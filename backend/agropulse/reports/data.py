@@ -12,8 +12,10 @@ from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import date
 
+from agropulse.analytics.farm import FarmAssessment
 from agropulse.db.models import (
     Anomaly,
+    Farm,
     Field,
     ForecastRun,
     Observation,
@@ -46,3 +48,43 @@ class ProjectData:
     period_from: date
     period_to: date
     fields: list[FieldData] = dataclass_field(default_factory=list)
+
+
+@dataclass(slots=True)
+class FarmData:
+    """Данные хозяйства для заключения.
+
+    Индекс приходит уже посчитанным. Сборщик отчёта не считает ничего:
+    иначе цифра в PDF и цифра на экране разошлись бы при первой же правке
+    формулы, а объяснить комиссии, какая из них верная, было бы нечем.
+    """
+
+    farm: Farm
+    period_from: date
+    period_to: date
+    assessment: FarmAssessment
+    fields: list[FieldData] = dataclass_field(default_factory=list)
+
+
+@dataclass(slots=True)
+class RegistryEntry:
+    farm: Farm
+    assessment: FarmAssessment
+    rank: int | None = None
+
+
+@dataclass(slots=True)
+class RegistryData:
+    """Реестр приоритетной поддержки: ранжированные хозяйства и остаток.
+
+    Поля без хозяйства перечисляются отдельно и полным списком. Молча
+    выбросить их из реестра нельзя: это площадь, которую документ
+    не покрывает, и распорядитель средств обязан об этом знать.
+    """
+
+    project_id: object
+    period_from: date
+    period_to: date
+    rows: list[RegistryEntry] = dataclass_field(default_factory=list)
+    undetermined: list[RegistryEntry] = dataclass_field(default_factory=list)
+    unassigned_fields: list[Field] = dataclass_field(default_factory=list)

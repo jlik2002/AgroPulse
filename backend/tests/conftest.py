@@ -100,8 +100,8 @@ def db_session(database) -> Iterator[Session]:  # noqa: F821
         # Порядок не важен: TRUNCATE ... CASCADE снимает внешние ключи.
         session.execute(
             text(
-                "TRUNCATE projects, fields, observations, anomalies, "
-                "forecast_runs, jobs, scene_assets, raw_cache CASCADE"
+                "TRUNCATE projects, farms, fields, observations, anomalies, "
+                "forecast_runs, jobs, scene_assets, generated_reports, raw_cache CASCADE"
             )
         )
         session.commit()
@@ -152,8 +152,8 @@ def client(database, published_tasks) -> Iterator[TestClient]:  # noqa: F821
     session = create_session()
     session.execute(
         text(
-            "TRUNCATE projects, fields, observations, anomalies, "
-            "forecast_runs, jobs, scene_assets, raw_cache CASCADE"
+            "TRUNCATE projects, farms, fields, observations, anomalies, "
+            "forecast_runs, jobs, scene_assets, generated_reports, raw_cache CASCADE"
         )
     )
     session.commit()
@@ -196,12 +196,23 @@ def created_project(client, project_payload) -> dict:
 
 
 @pytest.fixture
-def created_field(client, created_project) -> dict:
+def created_farm(client, created_project) -> dict:
+    response = client.post(
+        "/api/farms",
+        json={"name": "КФХ Тестовое", "district": "Тестовый район"},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+@pytest.fixture
+def created_field(client, created_project, created_farm) -> dict:
     response = client.post(
         f"/api/projects/{created_project['id']}/fields",
         json={
             "name": "Поле №1",
             "geometry": SQUARE_POLYGON,
+            "farm_id": created_farm["id"],
             "crop": "пшеница",
             "sowing_date": date(2024, 4, 20).isoformat(),
         },

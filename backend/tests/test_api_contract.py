@@ -169,10 +169,17 @@ def test_delete_project_removes_its_fields(client, created_field, db_session) ->
 # ----------------------------------------------------------------------
 
 
-def test_create_field_computes_area_and_returns_geojson(client, created_project) -> None:
+def test_create_field_computes_area_and_returns_geojson(
+    client, created_project, created_farm
+) -> None:
     response = client.post(
         f"/api/projects/{created_project['id']}/fields",
-        json={"name": "Поле №1", "geometry": SQUARE_POLYGON, "crop": "Кукуруза"},
+        json={
+            "name": "Поле №1",
+            "geometry": SQUARE_POLYGON,
+            "farm_id": created_farm["id"],
+            "crop": "Кукуруза",
+        },
     )
 
     assert response.status_code == 201
@@ -182,7 +189,7 @@ def test_create_field_computes_area_and_returns_geojson(client, created_project)
     assert 130.0 < body["area_ha"] < 150.0
 
 
-def test_create_field_requires_current_crop(client, created_project) -> None:
+def test_create_field_requires_current_crop(client, created_project, created_farm) -> None:
     """Культура текущего сезона обязательна.
 
     Требование продуктовое: норма строится по прошлым сезонам того же поля,
@@ -191,7 +198,11 @@ def test_create_field_requires_current_crop(client, created_project) -> None:
     """
     response = client.post(
         f"/api/projects/{created_project['id']}/fields",
-        json={"name": "Поле без культуры", "geometry": SQUARE_POLYGON},
+        json={
+            "name": "Поле без культуры",
+            "geometry": SQUARE_POLYGON,
+            "farm_id": created_farm["id"],
+        },
     )
     assert response.status_code == 422
 
@@ -199,22 +210,102 @@ def test_create_field_requires_current_crop(client, created_project) -> None:
     # одного символа, а в отчёте появляется пустая строка вместо названия.
     blank = client.post(
         f"/api/projects/{created_project['id']}/fields",
-        json={"name": "Поле с пробелом", "geometry": SQUARE_POLYGON, "crop": "   "},
+        json={
+            "name": "Поле с пробелом",
+            "geometry": SQUARE_POLYGON,
+            "farm_id": created_farm["id"],
+            "crop": "   ",
+        },
     )
     assert blank.status_code == 422
 
 
-def test_create_field_trims_crop(client, created_project) -> None:
+def test_create_field_trims_crop(client, created_project, created_farm) -> None:
     response = client.post(
         f"/api/projects/{created_project['id']}/fields",
         json={
             "name": "Поле с лишними пробелами",
             "geometry": SQUARE_POLYGON,
+            "farm_id": created_farm["id"],
             "crop": "  Пшеница   озимая  ",
         },
     )
     assert response.status_code == 201
     assert response.json()["crop"] == "Пшеница озимая"
+
+
+def test_create_field_requires_farm(client, created_project, created_farm) -> None:
+    """Хозяйство обязательно и должно существовать.
+
+    Поле без владельца не попадает ни в одну строку реестра — то есть просто
+    исчезает из государственного сценария. Принадлежность проекту не проверяется:
+    справочник хозяйств общий, и одно предприятие законно встречается
+    в нескольких проектах.
+    """
+    missing = client.post(
+        f"/api/projects/{created_project['id']}/fields",
+        json={"name": "Поле без хозяйства", "geometry": SQUARE_POLYGON, "crop": "Ячмень"},
+    )
+    assert missing.status_code == 422
+
+    unknown = client.post(
+        f"/api/projects/{created_project['id']}/fields",
+        json={
+            "name": "Поле несуществующего хозяйства",
+            "geometry": SQUARE_POLYGON,
+            "farm_id": str(uuid.uuid4()),
+            "crop": "Ячмень",
+        },
+    )
+    assert unknown.status_code == 404
+    assert unknown.json()["error"]["code"] == "farm_not_found"
+
+
+def test_registry_separates_ranked_farms_from_fields_without_owner(
+    client, created_project, created_farm, created_field
+) -> None:
+    """Реестр ранжирует хозяйства, а поля без владельца показывает отдельно.
+
+    Поле создано с хозяйством и ещё не считалось, поэтому заключения по нему
+    нет — хозяйство попадает в список без заключения, а не в конец очереди.
+    """
+    orphan = client.post(
+        f"/api/projects/{created_project['id']}/fields",
+        json={
+            "name": "Ничей контур",
+            "geometry": SQUARE_POLYGON,
+            "farm_id": created_farm["id"],
+            "crop": "Соя",
+        },
+    ).json()
+    # Отвязать поле через API нельзя — это делает только удаление хозяйства.
+    # Здесь достаточно проверить, что привязанные поля в остаток не попадают.
+    assert orphan["farm_id"] == created_farm["id"]
+    assert created_field["farm_id"] == created_farm["id"]
+
+    body = client.get(f"/api/projects/{created_project['id']}/registry").json()
+
+    assert body["farms_total"] == 1
+    assert body["other_farms"] == []
+    assert body["unassigned_fields"] == []
+    assert body["rows"] == []
+    assert len(body["undetermined"]) == 1
+    assessment = body["undetermined"][0]["assessment"]
+    assert assessment["support_need_score"] is None
+    assert assessment["category"] == "undetermined"
+    assert body["undetermined"][0]["rank"] is None
+
+
+def test_deleting_farm_keeps_its_fields(client, created_farm, created_field) -> None:
+    """Удаление хозяйства не уносит поля: вместе с ними ушли бы наблюдения."""
+    response = client.delete(f"/api/farms/{created_farm['id']}")
+
+    assert response.status_code == 200
+    assert response.json() == {"orphaned_fields": 1}
+
+    field = client.get(f"/api/fields/{created_field['id']}")
+    assert field.status_code == 200
+    assert field.json()["farm_id"] is None
 
 
 def test_field_response_hides_internal_columns(client, created_field) -> None:
@@ -227,6 +318,7 @@ def test_field_response_hides_internal_columns(client, created_field) -> None:
     assert set(created_field) == {
         "id",
         "project_id",
+        "farm_id",
         "name",
         "geometry",
         "area_ha",
@@ -240,13 +332,16 @@ def test_field_response_hides_internal_columns(client, created_field) -> None:
     }
 
 
-def test_field_keeps_reference_to_open_source_contour(client, created_project) -> None:
+def test_field_keeps_reference_to_open_source_contour(
+    client, created_project, created_farm
+) -> None:
     """Контур, выбранный из OSM, сохраняет ссылку на исходный объект."""
     response = client.post(
         f"/api/projects/{created_project['id']}/fields",
         json={
             "name": "Контур из OSM",
             "geometry": SQUARE_POLYGON,
+            "farm_id": created_farm["id"],
             "crop": "Пшеница озимая",
             "source": "osm",
             "external_ref": "way/1462647786",
@@ -259,7 +354,9 @@ def test_field_keeps_reference_to_open_source_contour(client, created_project) -
     assert body["external_ref"] == "way/1462647786"
 
 
-def test_create_field_rejects_self_intersecting_polygon(client, created_project) -> None:
+def test_create_field_rejects_self_intersecting_polygon(
+    client, created_project, created_farm
+) -> None:
     bowtie = {
         "type": "Polygon",
         "coordinates": [
@@ -269,14 +366,19 @@ def test_create_field_rejects_self_intersecting_polygon(client, created_project)
 
     response = client.post(
         f"/api/projects/{created_project['id']}/fields",
-        json={"name": "Восьмёрка", "geometry": bowtie, "crop": "Ячмень"},
+        json={
+            "name": "Восьмёрка",
+            "geometry": bowtie,
+            "farm_id": created_farm["id"],
+            "crop": "Ячмень",
+        },
     )
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "invalid_geometry"
 
 
-def test_create_field_rejects_tiny_polygon(client, created_project) -> None:
+def test_create_field_rejects_tiny_polygon(client, created_project, created_farm) -> None:
     """Поле меньше нескольких пикселей Sentinel-2 не имеет смысла анализировать."""
     speck = {
         "type": "Polygon",
@@ -287,7 +389,12 @@ def test_create_field_rejects_tiny_polygon(client, created_project) -> None:
 
     response = client.post(
         f"/api/projects/{created_project['id']}/fields",
-        json={"name": "Пятнышко", "geometry": speck, "crop": "Ячмень"},
+        json={
+            "name": "Пятнышко",
+            "geometry": speck,
+            "farm_id": created_farm["id"],
+            "crop": "Ячмень",
+        },
     )
 
     assert response.status_code == 422
@@ -297,7 +404,12 @@ def test_create_field_rejects_tiny_polygon(client, created_project) -> None:
 def test_create_field_in_missing_project_returns_404(client) -> None:
     response = client.post(
         f"/api/projects/{uuid.uuid4()}/fields",
-        json={"name": "Поле", "geometry": SQUARE_POLYGON, "crop": "Ячмень"},
+        json={
+            "name": "Поле",
+            "geometry": SQUARE_POLYGON,
+            "farm_id": str(uuid.uuid4()),
+            "crop": "Ячмень",
+        },
     )
 
     assert response.status_code == 404

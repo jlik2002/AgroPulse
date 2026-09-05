@@ -39,6 +39,7 @@ def create_field(
         CreateFieldCommand(
             name=payload.name,
             geometry=payload.geometry.model_dump(),
+            farm_id=payload.farm_id,
             crop=payload.crop,
             sowing_date=payload.sowing_date,
             source=payload.source,
@@ -67,6 +68,7 @@ def update_field(
         UpdateFieldCommand(
             name=payload.name,
             geometry=payload.geometry.model_dump() if payload.geometry else None,
+            farm_id=payload.farm_id,
             crop=payload.crop,
             sowing_date=payload.sowing_date,
         ),

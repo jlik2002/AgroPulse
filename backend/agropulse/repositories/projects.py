@@ -13,6 +13,12 @@ from agropulse.db.models import Project
 # к работе, а не чтобы листать архив за всё время.
 OWNER_PROJECTS_LIMIT = 20
 
+# Владелец демонстрационных данных, заведённых миграцией `c7f3e91a4b58`.
+# Его проект показывается всякому посетителю: регистрации нет, cookie у
+# каждого своя, и без этого демонстрация была бы видна только тому браузеру,
+# в котором её случайно открыли, — то есть никому.
+DEMO_OWNER_ID = uuid.UUID("d3000000-0000-4000-8000-000000000001")
+
 
 class ProjectRepository:
     def __init__(self, session: Session) -> None:
@@ -22,10 +28,10 @@ class ProjectRepository:
         return self._session.get(Project, project_id)
 
     def list_for_owner(self, owner_id: uuid.UUID) -> list[Project]:
-        """Проекты посетителя, свежие первыми."""
+        """Проекты посетителя и демонстрационный, свежие первыми."""
         rows = self._session.execute(
             select(Project)
-            .where(Project.owner_id == owner_id)
+            .where(Project.owner_id.in_([owner_id, DEMO_OWNER_ID]))
             .order_by(Project.created_at.desc())
             .limit(OWNER_PROJECTS_LIMIT)
         )

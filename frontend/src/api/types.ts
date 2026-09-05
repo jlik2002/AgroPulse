@@ -32,9 +32,116 @@ export interface Project {
   created_at: string;
 }
 
+/** Хозяйство — сельхозпроизводитель, которому принадлежат поля.
+ *  Единица решения о поддержке: реестр ранжирует хозяйства, а не контуры.
+ *  Справочник общий и проекту не принадлежит — заведённое однажды хозяйство
+ *  доступно из любого проекта. */
+export interface Farm {
+  id: string;
+  name: string;
+  inn: string | null;
+  legal_form: string | null;
+  district: string | null;
+  region: string | null;
+  contact: string | null;
+  note: string | null;
+  created_at: string;
+}
+
+/** Категория для комиссии. Ни одна не означает решения о деньгах:
+ *  спутник даёт основание рассмотреть хозяйство, а не назначить выплату. */
+export type ReviewCategory = "urgent" | "support" | "clarify" | "monitor" | "undetermined";
+
+export type FarmTrust = "high" | "medium" | "low";
+
+export interface FarmAssessment {
+  /** Индекс потребности в поддержке, 0–100. Пуст, если заключения нет. */
+  support_need_score: number | null;
+  trust: FarmTrust;
+  trust_title: string;
+  category: ReviewCategory;
+  category_title: string;
+  action: string;
+
+  fields_total: number;
+  critical: number;
+  attention: number;
+  normal: number;
+  insufficient_data: number;
+  pending: number;
+
+  total_area_ha: number;
+  assessed_area_ha: number;
+  /** Площадь, по которой заключения нет. Показывается всегда: без неё
+   *  низкий индекс неотличим от отсутствия наблюдений. */
+  unassessed_area_ha: number;
+  problem_area_ha: number;
+  critical_area_ha: number;
+
+  assessed_share: number;
+  problem_share: number;
+  critical_share: number;
+
+  weighted_risk: number | null;
+  max_field_risk: number | null;
+  mean_confidence: number | null;
+
+  anomalies_total: number;
+  anomalies_confirmed: number;
+
+  reason: string | null;
+  notes: string[];
+}
+
+export interface FarmSummary {
+  farm: Farm;
+  period_from: string;
+  period_to: string;
+  assessment: FarmAssessment;
+  fields: FieldSummary[];
+}
+
+export interface RegistryRow {
+  /** Место в очереди рассмотрения. Пусто у хозяйства без заключения. */
+  rank: number | null;
+  farm: Farm;
+  assessment: FarmAssessment;
+}
+
+export interface Registry {
+  project_id: string;
+  period_from: string;
+  period_to: string;
+  farms_total: number;
+  total_area_ha: number;
+  rows: RegistryRow[];
+  undetermined: RegistryRow[];
+  /** Хозяйства справочника, у которых в этом проекте полей нет. */
+  other_farms: Farm[];
+  /** Поля, не привязанные ни к одному хозяйству. В реестр не входят. */
+  unassigned_fields: FieldSummary[];
+}
+
+export type ReportKind = "field" | "farm" | "project" | "registry";
+
+export interface GeneratedReport {
+  id: string;
+  kind: ReportKind;
+  title: string;
+  filename: string;
+  project_id: string;
+  farm_id: string | null;
+  field_id: string | null;
+  pages: number | null;
+  size_bytes: number | null;
+  created_at: string;
+}
+
 export interface Field {
   id: string;
   project_id: string;
+  /** Хозяйство-владелец. Пусто у полей, заведённых до появления хозяйств. */
+  farm_id: string | null;
   name: string;
   geometry: PolygonGeometry;
   area_ha: number | null;
